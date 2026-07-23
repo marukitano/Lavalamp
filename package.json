@@ -1,0 +1,32 @@
+{
+  "name": "lavalamp",
+  "author": "Maru Kitano",
+  "version": "0.1.0",
+  "keywords": [
+    "pebble-app",
+    "watchface",
+    "binary-clock"
+  ],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Lavalamp",
+    "uuid": "730591b1-1bdd-4183-8fed-400676f42e97",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "diorite",
+      "flint",
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": true
+    },
+    "messageKeys": [],
+    "resources": {
+      "media": []
+    }
+  }
+}

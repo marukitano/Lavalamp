@@ -22,7 +22,7 @@ void handle_timer(void *data);  //Es gibt später eine Funktion namens handle_ti
 
 #define FIXMULT(a, b) (( (a)*(b) ) >> FIXBITS)  //Multipliziert zwei Fixed-Point-Zahlen. Nach der Multiplikation muss das Ergebnis wieder um zehn Bits zurückgeschoben werden
 #define FIX2INT(a) ( ((a) + (1<<(FIXBITS-1))) >> FIXBITS)  //Wandelt Fixed Point zurück in eine Ganzzahl
-#define INT2FIX(a) ((a) << FIXBITS)  //Wandelt eine Ganzzahl in Fixed Point um
+#define INT2FIX(a) ((a) * (1 << FIXBITS))  //Wandelt eine Ganzzahl in Fixed Point um
 
 void pt_add(PT2 *a, PT2 b)  //Diese Funktion addiert b zu a
 {
