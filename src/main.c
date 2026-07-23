@@ -1,48 +1,48 @@
-#include <pebble.h>
+#include <pebble.h> //einbinden vom SDK
 
-#include "mytypes.h"
-#include "rand.h"
+#include "mytypes.h" //einbinden von Hilfsmakros
+#include "rand.h"  //selbstgeschriebener Zufallsgenerator
 
-Window *glbWindowP;
-Layer *glbBlobLayerP;
+Window *glbWindowP;  //globaler Pointer auf das Hauptfenster der App
+Layer *glbBlobLayerP;  //Pointer auf die Zeichenebene, auf der die Blobs gerendert werden.
 
-bool glbLive  = false;
+bool glbLive  = false; //merkt sich, ob die schnelle Animation noch laeuft (batterieeffizienz)
 
-#define WIDTH 144
-#define HEIGHT 168
+#define WIDTH 144  //aufloesung der alten Pebble time
+#define HEIGHT 168  //aufloesung der alten Pebble time
 	
-typedef struct 
+typedef struct //strukt mit 2 ganzzahlen
 {
 	int	x, y;
 } PT2;
 
-void handle_timer(void *data);
+void handle_timer(void *data);  //Es gibt später eine Funktion namens handle_timer
 
-#define FIXBITS 10
+#define FIXBITS 10  //zehn Bits für den Nachkommateil reserviert. Eine normale Zahl wird intern mit 1024 multipliziert
 
-#define FIXMULT(a, b) (( (a)*(b) ) >> FIXBITS)
-#define FIX2INT(a) ( ((a) + (1<<(FIXBITS-1))) >> FIXBITS)
-#define INT2FIX(a) ((a) << FIXBITS)
+#define FIXMULT(a, b) (( (a)*(b) ) >> FIXBITS)  //Multipliziert zwei Fixed-Point-Zahlen. Nach der Multiplikation muss das Ergebnis wieder um zehn Bits zurückgeschoben werden
+#define FIX2INT(a) ( ((a) + (1<<(FIXBITS-1))) >> FIXBITS)  //Wandelt Fixed Point zurück in eine Ganzzahl
+#define INT2FIX(a) ((a) << FIXBITS)  //Wandelt eine Ganzzahl in Fixed Point um
 
-void pt_add(PT2 *a, PT2 b)
+void pt_add(PT2 *a, PT2 b)  //Diese Funktion addiert b zu a
 {
 	a->x += b.x;
 	a->y += b.y;
 }
 
-void pt_sub(PT2 *a, PT2 b)
+void pt_sub(PT2 *a, PT2 b)  //Dasselbe Prinzip, nur als Subtraktion
 {
 	a->x -= b.x;
 	a->y -= b.y;
 }
 
-void pt_mul(PT2 *a, PT2 b)
+void pt_mul(PT2 *a, PT2 b)  //Hier werden die X- und Y-Komponenten jeweils miteinander multipliziert
 {
 	a->x = FIXMULT(a->x, b.x);
 	a->y = FIXMULT(a->y, b.y);
 }
 
-int pt_normalize(PT2 *a)
+int pt_normalize(PT2 *a)  //Diese Funktion verkleinert einen Richtungsvektor auf eine standardisierte Länge
 {
 	// There exists a norm in which this makes sense.
 	int xdist = ABS(a->x);
@@ -72,30 +72,30 @@ int pt_normalize(PT2 *a)
 	}
 }
 	
-typedef struct 
+typedef struct //Ein PART besitzt position (x,y) und geschwindigkeit (x,y)
 {
 	PT2		pos;
 	PT2		vel;
 } PART;
 
-#define NUM_PART 10
+#define NUM_PART 10  //Es gibt genau zehn Partikel
 	
 PART		glbPart[NUM_PART];
 
-#define KERNEL_RAD 40
+#define KERNEL_RAD 40  //Jedes Partikel beeinflusst Pixel in einem Radius von maximal 40 Pixeln
 	
-#define REFRESH_RATE 50
-#define INTEGRATE_TIMER_ID 1
+#define REFRESH_RATE 50  //Während der Animation erfolgt ungefähr alle 50 Millisekunden ein Update (20 bilder\sek)
+#define INTEGRATE_TIMER_ID 1  //Aktuell nicht in verwendung
 	
-#define NUM_CLOCKBITS 10
+#define NUM_CLOCKBITS 10  //anzahl Clockbits
 	
-#define CENTER_X 72
-#define CENTER_Y 84
-#define GRID_SPACING 10
+#define CENTER_X 72  //bildschirmmitte
+#define CENTER_Y 84  //bildschirmmitte
+#define GRID_SPACING 10  //Grid, mit dem die Blobs angeordnet werden
 	
-int glbTargetMinute = -1;
+int glbTargetMinute = -1;  //speichert die zuletzt verarbeitete Minute. Der Startwert -1 ist absichtlich ungültig. Dadurch wird beim Start garantiert die aktuelle Uhrzeit verarbeitet
 	
-const PT2 glbTargets[NUM_CLOCKBITS] =
+const PT2 glbTargets[NUM_CLOCKBITS] = //die blobpositionen im Grid
 {
 	// Hour bits, high to low
 	{ CENTER_X - 4.5 * GRID_SPACING, CENTER_Y - 4 * GRID_SPACING },
@@ -112,9 +112,9 @@ const PT2 glbTargets[NUM_CLOCKBITS] =
 	{ CENTER_X + 5.5 * GRID_SPACING, CENTER_Y + 3 * GRID_SPACING },
 };
 
-PT2 glbPartTargets[NUM_PART];
+PT2 glbPartTargets[NUM_PART];  //Dieses Array enthält für jedes der zehn Partikel seine momentane Zielposition
 	
-const int glbBlinnKernel[KERNEL_RAD] =
+const int glbBlinnKernel[KERNEL_RAD] =  //Lava-Lampen-Effekt
 {
 	2048,
 	2037,
@@ -159,7 +159,7 @@ const int glbBlinnKernel[KERNEL_RAD] =
 };
 
 int
-blinn(int dist)
+blinn(int dist)  //Einfluss nach Entfernung abrufen
 {
 	dist = FIX2INT(dist);
 	if (dist >= KERNEL_RAD)
@@ -167,17 +167,17 @@ blinn(int dist)
 	return glbBlinnKernel[dist];
 }
 
-int metadist(PT2 a, PT2 b)
+int metadist(PT2 a, PT2 b)  //Einfluss eines Partikels auf einen Pixel
 {
 	int adist = ABS(a.x - b.x);
 	int bdist = ABS(a.y - b.y);
-	return FIXMULT( blinn(adist), blinn(bdist) );
+	return FIXMULT( blinn(adist), blinn(bdist) );  //Überschreitet die Summe einen Grenzwert, wird der Pixel schwarz. So verschmelzen die Partikel zu zusammenhängenden Blobs.
 }
 
-static int blob_plist[NUM_PART];
-static int blob_plistx[NUM_PART];
+static int blob_plist[NUM_PART];  //Hilfsarrays für das Rendern
+static int blob_plistx[NUM_PART];  //Hilfsarrays für das Rendern
 
-void bloblayer_update(Layer *me, GContext *ctx)
+void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK. ab hier wird gezeichnet
 {
 	(void) me;
 	
