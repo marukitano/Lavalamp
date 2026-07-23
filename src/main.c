@@ -112,6 +112,16 @@ const PT2 glbTargets[NUM_CLOCKBITS] = //die blobpositionen im Grid
 	{ CENTER_X + 5.5 * GRID_SPACING, CENTER_Y + 3 * GRID_SPACING },
 };
 
+// Values represented by the ten binary positions.
+const char *glbTargetLabels[NUM_CLOCKBITS] =
+{
+	"8", "4", "2", "1",
+	"32", "16", "8", "4", "2", "1"
+};
+
+// Tracks which binary positions are active for the current time.
+bool glbActiveTargets[NUM_CLOCKBITS] = { false };
+
 PT2 glbPartTargets[NUM_PART];  //Dieses Array enthält für jedes der zehn Partikel seine momentane Zielposition
 	
 const int glbBlinnKernel[KERNEL_RAD] =  //Lava-Lampen-Effekt
@@ -262,12 +272,40 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 			{
 				totaldist += metadist(glbPart[blob_plist[part]].pos, cpos);
 			}
-			if (totaldist > INT2FIX(1))
+						if (totaldist > INT2FIX(1))
 				graphics_draw_pixel(ctx, GPoint(x, y));
 		}
 	}
-}
 
+	// Draw the values on top of the active blobs.
+	graphics_context_set_text_color(ctx, GColorWhite);
+
+	GFont label_font =
+		fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+
+	for (int target = 0; target < NUM_CLOCKBITS; target++)
+	{
+		if (!glbActiveTargets[target])
+			continue;
+
+		GRect label_bounds = GRect(
+			glbTargets[target].x - 14,
+			glbTargets[target].y - 10,
+			28,
+			20
+		);
+
+		graphics_draw_text(
+			ctx,
+			glbTargetLabels[target],
+			label_font,
+			label_bounds,
+			GTextOverflowModeFill,
+			GTextAlignmentCenter,
+			NULL
+		);
+	}
+}
 void handle_init() 
 {
 	glbWindowP = window_create();
@@ -394,20 +432,31 @@ handle_tick(struct tm *tick_time, TimeUnits units_chnnged)
 	int 	ntarget = 0;
 	static int		targets[NUM_CLOCKBITS];
 	int hour = tick_time->tm_hour;
+
+    for (int target = 0; target < NUM_CLOCKBITS; target++)
+	    glbActiveTargets[target] = false;
 	
 	if (hour > 12)
 		hour -= 12;
 	
 	for (int bit = 0; bit < 4; bit++)
+{
+	if (hour & (1 << (3-bit)))
 	{
-		if (hour & (1 << (3-bit)))
-			targets[ntarget++] = bit;
+		targets[ntarget++] = bit;
+		glbActiveTargets[bit] = true;
 	}
+}
 	for (int bit = 0; bit < 6; bit++)
+{
+	if (tick_time->tm_min & (1 << (5-bit)))
 	{
-		if (tick_time->tm_min & (1 << (5-bit)))
-			targets[ntarget++] = bit + 4;
+		int target = bit + 4;
+
+		targets[ntarget++] = target;
+		glbActiveTargets[target] = true;
 	}
+}
 	
 	// Assign targets.
 	// If no targets, it is midnight/noon, scatter!
