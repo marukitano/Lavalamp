@@ -2,13 +2,13 @@
     "versionLabel": "1.0",
     "uuid": "484ec19b-d836-4270-8299-fda33bff5f36",
     "appKeys": {},
-    "longName": "Binary Blob",
+    "longName": "Lavalamp",
     "versionCode": 1,
     "capabilities": [
         ""
     ],
-    "shortName": "Binary Blob",
-    "companyName": "jmlait",
+    "shortName": "Lava Lamp",
+    "companyName": "maru",
     "watchapp": {
         "watchface": true
     },

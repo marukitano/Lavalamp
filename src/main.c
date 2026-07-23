@@ -179,11 +179,11 @@ static int blob_plistx[NUM_PART];  //Hilfsarrays für das Rendern
 
 void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK. ab hier wird gezeichnet
 {
-	(void) me;
+	(void) me;  //vermutlich ueberfluessig
 	
 	// Useful for debugging that the timer shuts down
 //	if (glbLive)
-	if (1)
+	if (1)  //immer true, daher ist else sinnlos
 	{
 		graphics_context_set_fill_color(ctx, GColorWhite);
 		graphics_context_set_stroke_color(ctx, GColorBlack);
@@ -194,12 +194,12 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 		graphics_context_set_stroke_color(ctx, GColorWhite);
 	}
 	
-	graphics_fill_rect(ctx, layer_get_frame(me), 0, 0);
+	graphics_fill_rect(ctx, layer_get_frame(me), 0, 0);  //Hier wird die gesamte Zeichenfläche mit der aktuellen Füllfarbe ausgefüllt
 	
-	for (int y = 0; y < HEIGHT; y++)
+	for (int y = 0; y < HEIGHT; y++)  //Der Bildschirm wird zeilenweise berechnet
 	{
-		int nlive = 0;
-		for (int part = 0; part < NUM_PART; part++)
+		int nlive = 0;  //Hier zählt es, wie viele Partikel für die aktuelle Y-Zeile relevant sind
+		for (int part = 0; part < NUM_PART; part++)  //Jetzt werden alle zehn Partikel geprüft
 		{
 			int py = FIX2INT(glbPart[part].pos.y);
 			py -= y;
@@ -209,11 +209,11 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 			}
 		}
 		
-		if (!nlive)
+		if (!nlive)  //Wenn kein Partikel diese Zeile beeinflussen kann, wird die restliche Berechnung für diese Zeile übersprungen
 			continue;
 		
 		// Sort plist by x
-		for (int i = 0; i < nlive-1; i++)
+		for (int i = 0; i < nlive-1; i++)  //Relevante Partikel nach X sortieren
 		{
 			for (int j = i+1; j < nlive; j++)
 			{
@@ -230,7 +230,7 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 		for (int i = 0; i < nlive; i++)
 			blob_plistx[i] = FIX2INT(glbPart[blob_plist[i]].pos.x);
 		
-		int sx = blob_plistx[0] - KERNEL_RAD;
+		int sx = blob_plistx[0] - KERNEL_RAD;  //Startpunkt der X-Schleife bestimmen
 		if (sx < 0)
 			sx = 0;
 		
