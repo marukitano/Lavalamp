@@ -7,5 +7,3 @@ The goal of this fork is to improve readability by displaying the corresponding 
 The colors should also be customizable through the watchface settings.
 
 This fork is called **Lavalamp**.
-
-![Lavalamp](./lavalamp.png)
