@@ -77,7 +77,15 @@ typedef struct {
     uint8_t background_argb;
     uint8_t blob_argb;
     uint8_t value_argb;
+    uint8_t show_values;
 } LavalampSettings;
+
+// Used once to migrate installations that stored only the three colors.
+typedef struct {
+    uint8_t background_argb;
+    uint8_t blob_argb;
+    uint8_t value_argb;
+} LegacyLavalampSettings;
 
 // -----------------------------------------------------------------------------
 // UI and application state
@@ -155,6 +163,7 @@ static const int s_blinn_kernel[KERNEL_TABLE_RADIUS] = {
 
 static void animation_timer_callback(void *context);
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed);
+static void save_settings(void);
 
 // -----------------------------------------------------------------------------
 // Fixed-point vector helpers
@@ -267,13 +276,35 @@ static void load_settings(void)
     s_settings.background_argb = GColorWhite.argb;
     s_settings.blob_argb = GColorBlack.argb;
     s_settings.value_argb = GColorWhite.argb;
+    s_settings.show_values = true;
 
-    if (persist_exists(SETTINGS_PERSIST_KEY) &&
-        persist_get_size(SETTINGS_PERSIST_KEY) == (int)sizeof(s_settings)) {
-        persist_read_data(
-            SETTINGS_PERSIST_KEY,
-            &s_settings,
-            sizeof(s_settings));
+    if (persist_exists(SETTINGS_PERSIST_KEY)) {
+        const int stored_size = persist_get_size(SETTINGS_PERSIST_KEY);
+
+        if (stored_size == (int)sizeof(s_settings)) {
+            persist_read_data(
+                SETTINGS_PERSIST_KEY,
+                &s_settings,
+                sizeof(s_settings));
+        } else if (stored_size == (int)sizeof(LegacyLavalampSettings)) {
+            LegacyLavalampSettings legacy_settings;
+
+            persist_read_data(
+                SETTINGS_PERSIST_KEY,
+                &legacy_settings,
+                sizeof(legacy_settings));
+
+            s_settings.background_argb =
+                legacy_settings.background_argb;
+            s_settings.blob_argb =
+                legacy_settings.blob_argb;
+            s_settings.value_argb =
+                legacy_settings.value_argb;
+
+            // Existing users keep the current appearance after updating.
+            s_settings.show_values = true;
+            save_settings();
+        }
     }
 
     apply_settings();
@@ -313,6 +344,12 @@ static void inbox_received_handler(
     if (tuple) {
         s_settings.value_argb =
             GColorFromHEX(tuple->value->int32).argb;
+        changed = true;
+    }
+
+    tuple = dict_find(iterator, MESSAGE_KEY_ShowValues);
+    if (tuple) {
+        s_settings.show_values = tuple->value->int32 != 0;
         changed = true;
     }
 
@@ -568,6 +605,10 @@ static void draw_blobs(GContext *context)
 
 static void draw_values(GContext *context)
 {
+    if (!s_settings.show_values) {
+        return;
+    }
+
     bool should_draw = s_blobs_settled && s_label_opacity > 0;
 
 #if !defined(PBL_COLOR)

@@ -5,7 +5,23 @@ module.exports = [
   },
   {
     "type": "text",
-    "defaultValue": "Choose the colors used by the watchface."
+    "defaultValue": "Choose the appearance of the watchface."
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Display"
+      },
+      {
+        "type": "toggle",
+        "messageKey": "ShowValues",
+        "defaultValue": true,
+        "label": "Show values",
+        "description": "Turn this off to use the original blob-only style."
+      }
+    ]
   },
   {
     "type": "section",
