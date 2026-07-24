@@ -1,1024 +1,945 @@
-#include <pebble.h> //einbinden vom SDK
+#include <pebble.h>
 
-#include "mytypes.h" //einbinden von Hilfsmakros
-#include "rand.h"  //selbstgeschriebener Zufallsgenerator
+#include "mytypes.h"
+#include "rand.h"
 
-Window *glbWindowP;  //globaler Pointer auf das Hauptfenster der App
-Layer *glbBlobLayerP;  //Pointer auf die Zeichenebene, auf der die Blobs gerendert werden.
-#define NUM_VALUE_FONTS 6
+// -----------------------------------------------------------------------------
+// Display and animation
+// -----------------------------------------------------------------------------
 
-// Mehrere feste Groessen desselben Fonts.
-// Pebble kann einen geladenen Font nicht stufenlos skalieren.
-GFont glbValueFonts[NUM_VALUE_FONTS];
+#define DISPLAY_WIDTH PBL_DISPLAY_WIDTH
+#define DISPLAY_HEIGHT PBL_DISPLAY_HEIGHT
 
-
-#define SETTINGS_PERSIST_KEY 1
-
-typedef struct
-{
-	uint8_t background_argb;
-	uint8_t blob_argb;
-	uint8_t value_argb;
-} LavalampSettings;
-
-LavalampSettings glbSettings;
-
-GColor glbBackgroundColor;
-GColor glbBlobColor;
-GColor glbValueColor;
-
-bool glbLive = false; //merkt sich, ob sich die Partikel noch bewegen
-bool glbBlobsSettled = false; //true, sobald alle Blobs ihre Zielposition erreicht haben
-bool glbTimerRunning = false; //verhindert, dass mehrere Animationstimer gleichzeitig laufen
-
-// Helligkeit der Zahlen: 0 = unsichtbar, 255 = vollständig sichtbar.
-int glbLabelBrightness = 0;
-
-// Verwendet automatisch die Aufloesung der jeweiligen Pebble.
-// Auf der Pebble Time 2 (Emery) sind das 200 x 228 Pixel.
-#define WIDTH PBL_DISPLAY_WIDTH
-#define HEIGHT PBL_DISPLAY_HEIGHT
-	
-typedef struct //strukt mit 2 ganzzahlen
-{
-	int	x, y;
-} PT2;
-
-void handle_timer(void *data);  //Es gibt später eine Funktion namens handle_timer
-
-#define FIXBITS 10  //zehn Bits für den Nachkommateil reserviert. Eine normale Zahl wird intern mit 1024 multipliziert
-
-#define FIXMULT(a, b) (( (a)*(b) ) >> FIXBITS)  //Multipliziert zwei Fixed-Point-Zahlen. Nach der Multiplikation muss das Ergebnis wieder um zehn Bits zurückgeschoben werden
-#define FIX2INT(a) ( ((a) + (1<<(FIXBITS-1))) >> FIXBITS)  //Wandelt Fixed Point zurück in eine Ganzzahl
-#define INT2FIX(a) ((a) * (1 << FIXBITS))  //Wandelt eine Ganzzahl in Fixed Point um
-
-void pt_add(PT2 *a, PT2 b)  //Diese Funktion addiert b zu a
-{
-	a->x += b.x;
-	a->y += b.y;
-}
-
-void pt_sub(PT2 *a, PT2 b)  //Dasselbe Prinzip, nur als Subtraktion
-{
-	a->x -= b.x;
-	a->y -= b.y;
-}
-
-void pt_mul(PT2 *a, PT2 b)  //Hier werden die X- und Y-Komponenten jeweils miteinander multipliziert
-{
-	a->x = FIXMULT(a->x, b.x);
-	a->y = FIXMULT(a->y, b.y);
-}
-
-int pt_normalize(PT2 *a)  //Diese Funktion verkleinert einen Richtungsvektor auf eine standardisierte Länge
-{
-	// There exists a norm in which this makes sense.
-	int xdist = ABS(a->x);
-	int ydist = ABS(a->y);
-	if (!xdist && !ydist)
-		return 0;
-	
-	if (xdist < ydist)
-	{
-		int scale = INT2FIX(1) / ydist;
-		a->x = FIXMULT(a->x, scale);
-		if (a->y < 0)
-			a->y = INT2FIX(-1);
-		else
-			a->y = INT2FIX(1);
-		return scale;
-	}
-	else
-	{
-		int scale = INT2FIX(1) / xdist;
-		a->y = FIXMULT(a->y, scale);
-		if (a->x < 0)
-			a->x = INT2FIX(-1);
-		else
-			a->x = INT2FIX(1);
-		return scale;
-	}
-}
-	
-typedef struct //Ein PART besitzt position (x,y) und geschwindigkeit (x,y)
-{
-	PT2		pos;
-	PT2		vel;
-} PART;
-
-#define NUM_PART 10  //Es gibt genau zehn Partikel
-	
-PART		glbPart[NUM_PART];
-
-#define KERNEL_TABLE_RAD 40  //Die ursprüngliche Einflusskurve besitzt 40 Werte
-
-// Der Blobradius wird proportional zur gesamten Displaygroesse skaliert.
-// 144 x 168 ergibt weiterhin 40 Pixel, 200 x 228 ergibt 55 Pixel.
-#define KERNEL_RAD \
-	((KERNEL_TABLE_RAD * (WIDTH + HEIGHT) + 156) / 312)
-	
-#define REFRESH_RATE 50  //Während der Animation erfolgt ungefähr alle 50 Millisekunden ein Update (20 Bilder/Sekunde)
-#define LABEL_FADE_STEP 16  //16 Schritte à 50 ms ergeben ungefähr 0,8 Sekunden Einblendzeit
-#define INTEGRATE_TIMER_ID 1  //Aktuell nicht in Verwendung
-	
-#define NUM_CLOCKBITS 10  //anzahl Clockbits
-
-// Die ursprünglichen Zielpositionen wurden für ein Display mit 144 x 168
-// Pixeln entworfen. Diese Makros skalieren jede Position proportional auf
-// die tatsächliche Displaygroesse.
 #define ORIGINAL_WIDTH 144
 #define ORIGINAL_HEIGHT 168
-#define SCALE_X(value) ((value) * WIDTH / ORIGINAL_WIDTH)
-#define SCALE_Y(value) ((value) * HEIGHT / ORIGINAL_HEIGHT)
+#define SCALE_X(value) ((value) * DISPLAY_WIDTH / ORIGINAL_WIDTH)
+#define SCALE_Y(value) ((value) * DISPLAY_HEIGHT / ORIGINAL_HEIGHT)
 
-int glbTargetMinute = -1;  //speichert die zuletzt verarbeitete Minute. Der Startwert -1 ist absichtlich ungültig. Dadurch wird beim Start garantiert die aktuelle Uhrzeit verarbeitet
+#define NUM_PARTICLES 10
+#define NUM_CLOCK_BITS 10
+#define NUM_VALUE_FONTS 6
 
-const PT2 glbTargets[NUM_CLOCKBITS] = //proportional skalierte Blobpositionen
-{
-	// Stunden: 2^3, 2^2, 2^1, 2^0
-	{ SCALE_X(27),  SCALE_Y(44)  },
-	{ SCALE_X(57),  SCALE_Y(24)  },
-	{ SCALE_X(87),  SCALE_Y(54)  },
-	{ SCALE_X(117), SCALE_Y(34)  },
+#define REFRESH_RATE_MS 50
+#define LABEL_FADE_STEP 16
+#define LABEL_OPACITY_MAX 255
+#define VALUE_OPTICAL_Y_OFFSET (-7)
 
-	// Minuten: 2^5, 2^4, 2^3, 2^2, 2^1, 2^0
-	{ SCALE_X(17),  SCALE_Y(114) },
-	{ SCALE_X(47),  SCALE_Y(94)  },
-	{ SCALE_X(57),  SCALE_Y(134) },
-	{ SCALE_X(87),  SCALE_Y(134) },
-	{ SCALE_X(97),  SCALE_Y(94)  },
-	{ SCALE_X(127), SCALE_Y(114) },
+#define APP_MESSAGE_BUFFER_SIZE 128
+#define SETTINGS_PERSIST_KEY 1
+
+// -----------------------------------------------------------------------------
+// Fixed-point arithmetic
+// -----------------------------------------------------------------------------
+
+#define FIX_BITS 10
+#define FIX_ONE (1 << FIX_BITS)
+#define FIX_MULT(a, b) (((a) * (b)) >> FIX_BITS)
+#define FIX_TO_INT(a) (((a) + (1 << (FIX_BITS - 1))) >> FIX_BITS)
+#define INT_TO_FIX(a) ((a) * FIX_ONE)
+
+// -----------------------------------------------------------------------------
+// Blob rendering
+// -----------------------------------------------------------------------------
+
+#define KERNEL_TABLE_RADIUS 40
+
+// Scales the original 40-pixel radius proportionally to the display size.
+#define KERNEL_RADIUS \
+    ((KERNEL_TABLE_RADIUS * (DISPLAY_WIDTH + DISPLAY_HEIGHT) + 156) / 312)
+
+#define AA_SAMPLE_OFFSET (FIX_ONE / 4)
+#define AA_CHECK_BAND (FIX_ONE / 10)
+#define BLOB_THRESHOLD FIX_ONE
+
+#if defined(PBL_PLATFORM_EMERY)
+#define VALUE_LABEL_WIDTH 104
+#define VALUE_LABEL_MAX_HEIGHT 80
+#else
+#define VALUE_LABEL_WIDTH 72
+#define VALUE_LABEL_MAX_HEIGHT 58
+#endif
+
+// -----------------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------------
+
+typedef struct {
+    int x;
+    int y;
+} Point2;
+
+typedef struct {
+    Point2 position;
+    Point2 velocity;
+} Particle;
+
+typedef struct {
+    uint8_t background_argb;
+    uint8_t blob_argb;
+    uint8_t value_argb;
+} LavalampSettings;
+
+// -----------------------------------------------------------------------------
+// UI and application state
+// -----------------------------------------------------------------------------
+
+static Window *s_window;
+static Layer *s_blob_layer;
+static AppTimer *s_animation_timer;
+
+static GFont s_value_fonts[NUM_VALUE_FONTS];
+static int s_value_font_heights[NUM_CLOCK_BITS][NUM_VALUE_FONTS];
+
+static LavalampSettings s_settings;
+static GColor s_background_color;
+static GColor s_blob_color;
+static GColor s_value_color;
+static GColor s_edge_colors[5];
+
+static bool s_blobs_settled;
+static int s_label_opacity;
+static int s_target_hour = -1;
+static int s_target_minute = -1;
+
+// -----------------------------------------------------------------------------
+// Particles and clock targets
+// -----------------------------------------------------------------------------
+
+static Particle s_particles[NUM_PARTICLES];
+static Point2 s_particle_targets[NUM_PARTICLES];
+
+static const Point2 s_clock_targets[NUM_CLOCK_BITS] = {
+    // Hours: 8, 4, 2, 1
+    {SCALE_X(27), SCALE_Y(44)},
+    {SCALE_X(57), SCALE_Y(24)},
+    {SCALE_X(87), SCALE_Y(54)},
+    {SCALE_X(117), SCALE_Y(34)},
+
+    // Minutes: 32, 16, 8, 4, 2, 1
+    {SCALE_X(17), SCALE_Y(114)},
+    {SCALE_X(47), SCALE_Y(94)},
+    {SCALE_X(57), SCALE_Y(134)},
+    {SCALE_X(87), SCALE_Y(134)},
+    {SCALE_X(97), SCALE_Y(94)},
+    {SCALE_X(127), SCALE_Y(114)},
 };
 
-// Werte der zehn Binaerpositionen.
-const char *glbTargetLabels[NUM_CLOCKBITS] =
-{
-	"8", "4", "2", "1",
-	"32", "16", "8", "4", "2", "1"
+static const char *const s_target_labels[NUM_CLOCK_BITS] = {
+    "8", "4", "2", "1",
+    "32", "16", "8", "4", "2", "1",
 };
 
-// Tracks which binary positions are active for the current time.
-bool glbActiveTargets[NUM_CLOCKBITS] = { false };
+static bool s_active_targets[NUM_CLOCK_BITS];
+static uint8_t s_target_particle_count[NUM_CLOCK_BITS];
 
-// Anzahl der Partikel, die dem jeweiligen Zielblob zugeordnet wurden.
-// Daraus wird spaeter die passende Schriftgroesse gewaehlt.
-uint8_t glbTargetParticleCount[NUM_CLOCKBITS] = { 0 };
+// Scratch arrays reused by the renderer.
+static int s_row_particle_indices[NUM_PARTICLES];
+static int s_row_particle_x[NUM_PARTICLES];
+static const int s_aa_sample_x_sign[4] = {-1, 1, -1, 1};
+static const int s_aa_sample_y_sign[4] = {-1, -1, 1, 1};
 
-PT2 glbPartTargets[NUM_PART];  //Dieses Array enthält für jedes der zehn Partikel seine momentane Zielposition
+// -----------------------------------------------------------------------------
+// Blob kernel
+// -----------------------------------------------------------------------------
 
-int value_font_index_for_target(int target)
-{
-	const int particle_count = glbTargetParticleCount[target];
-	const bool is_two_digit =
-		glbTargetLabels[target][1] != '\0';
-
-	if (is_two_digit)
-	{
-		// 16 und 32 brauchen deutlich weniger Schriftgroesse als eine
-		// einzelne Ziffer. Sonst ragt der weisse Text aus dem schwarzen
-		// Blob heraus und verschwindet auf dem weissen Hintergrund.
-		if (particle_count <= 1)
-			return 0;  // Modak 26
-		if (particle_count == 2)
-			return 1;  // Modak 32
-		if (particle_count == 3)
-			return 2;  // Modak 36
-		return 3;      // Modak 42
-	}
-
-	// Einstellige Werte behalten die bisher gut wirkenden Groessen.
-	if (particle_count <= 1)
-		return 2;  // Modak 36
-	if (particle_count == 2)
-		return 3;  // Modak 42
-	if (particle_count == 3)
-		return 4;  // Modak 48
-	return 5;      // Modak 54
-}
-
-	
-const int glbBlinnKernel[KERNEL_TABLE_RAD] =  //Lava-Lampen-Effekt
-{
-	2048,
-	2037,
-	2002,
-	1946,
-	1872,
-	1779,
-	1673,
-	1555,
-	1429,
-	1298,
-	1167,
-	1037,
-	911,
-	791,
-	680,
-	577,
-	485,
-	403,
-	331,
-	269,
-	245,
-	216,
-	171,
-	134,
-	104,
-	80,
-	61,
-	45,
-	34,
-	25,
-	18,
-	13,
-	9,
-	6,
-	4,
-	3,
-	2,
-	1,
-	1,
-	0,
+static const int s_blinn_kernel[KERNEL_TABLE_RADIUS] = {
+    2048, 2037, 2002, 1946, 1872, 1779, 1673, 1555, 1429, 1298,
+    1167, 1037, 911, 791, 680, 577, 485, 403, 331, 269,
+    245, 216, 171, 134, 104, 80, 61, 45, 34, 25,
+    18, 13, 9, 6, 4, 3, 2, 1, 1, 0,
 };
 
-int
-blinn(int dist)  //Einfluss nach Entfernung abrufen
+// -----------------------------------------------------------------------------
+// Forward declarations
+// -----------------------------------------------------------------------------
+
+static void animation_timer_callback(void *context);
+static void tick_handler(struct tm *tick_time, TimeUnits units_changed);
+
+// -----------------------------------------------------------------------------
+// Fixed-point vector helpers
+// -----------------------------------------------------------------------------
+
+static void point_add(Point2 *point, Point2 other)
 {
-	if (dist >= INT2FIX(KERNEL_RAD))
-		return 0;
-
-	// Distanz proportional auf die ursprüngliche 40-Pixel-Kurve abbilden,
-	// dabei aber den Nachkommateil behalten.
-	int scaled_dist =
-		(dist * KERNEL_TABLE_RAD) / KERNEL_RAD;
-
-	int kernel_index = scaled_dist >> FIXBITS;
-	int fraction = scaled_dist & ((1 << FIXBITS) - 1);
-
-	if (kernel_index >= KERNEL_TABLE_RAD - 1)
-	{
-		// Am äussersten Ende gegen null auslaufen lassen.
-		int start_value = glbBlinnKernel[KERNEL_TABLE_RAD - 1];
-		return start_value -
-			FIXMULT(start_value, fraction);
-	}
-
-	int start_value = glbBlinnKernel[kernel_index];
-	int end_value = glbBlinnKernel[kernel_index + 1];
-
-	// Lineare Interpolation zwischen zwei benachbarten Kernelwerten.
-	return start_value +
-		FIXMULT(end_value - start_value, fraction);
+    point->x += other.x;
+    point->y += other.y;
 }
 
-int metadist(PT2 a, PT2 b)  //Einfluss eines Partikels auf einen Pixel
+static void point_subtract(Point2 *point, Point2 other)
 {
-	int adist = ABS(a.x - b.x);
-	int bdist = ABS(a.y - b.y);
-	return FIXMULT( blinn(adist), blinn(bdist) );  //Überschreitet die Summe einen Grenzwert, wird der Pixel schwarz. So verschmelzen die Partikel zu zusammenhängenden Blobs.
+    point->x -= other.x;
+    point->y -= other.y;
 }
 
-static int blob_plist[NUM_PART];  //Hilfsarrays für das Rendern
-static int blob_plistx[NUM_PART];  //Hilfsarrays für das Rendern
+static void point_multiply(Point2 *point, Point2 other)
+{
+    point->x = FIX_MULT(point->x, other.x);
+    point->y = FIX_MULT(point->y, other.y);
+}
+
+static void point_normalize(Point2 *point)
+{
+    const int x_distance = ABS(point->x);
+    const int y_distance = ABS(point->y);
+
+    if (x_distance == 0 && y_distance == 0) {
+        return;
+    }
+
+    if (x_distance < y_distance) {
+        const int scale = FIX_ONE / y_distance;
+        point->x = FIX_MULT(point->x, scale);
+        point->y = point->y < 0 ? -FIX_ONE : FIX_ONE;
+    } else {
+        const int scale = FIX_ONE / x_distance;
+        point->y = FIX_MULT(point->y, scale);
+        point->x = point->x < 0 ? -FIX_ONE : FIX_ONE;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Colors and settings
+// -----------------------------------------------------------------------------
 
 static int color_component(GColor color, int shift)
 {
-	return ((color.argb >> shift) & 0x03) * 85;
+    return ((color.argb >> shift) & 0x03) * 85;
 }
 
 static GColor mix_colors(
-	GColor from_color,
-	GColor to_color,
-	int amount,
-	int maximum
-)
+    GColor from_color,
+    GColor to_color,
+    int amount,
+    int maximum)
 {
-	if (amount <= 0)
-		return from_color;
+    if (amount <= 0) {
+        return from_color;
+    }
 
-	if (amount >= maximum)
-		return to_color;
+    if (amount >= maximum) {
+        return to_color;
+    }
 
-	int from_red = color_component(from_color, 4);
-	int from_green = color_component(from_color, 2);
-	int from_blue = color_component(from_color, 0);
+    const int from_red = color_component(from_color, 4);
+    const int from_green = color_component(from_color, 2);
+    const int from_blue = color_component(from_color, 0);
 
-	int to_red = color_component(to_color, 4);
-	int to_green = color_component(to_color, 2);
-	int to_blue = color_component(to_color, 0);
+    const int to_red = color_component(to_color, 4);
+    const int to_green = color_component(to_color, 2);
+    const int to_blue = color_component(to_color, 0);
 
-	int red =
-		(from_red * (maximum - amount) + to_red * amount) /
-		maximum;
-	int green =
-		(from_green * (maximum - amount) + to_green * amount) /
-		maximum;
-	int blue =
-		(from_blue * (maximum - amount) + to_blue * amount) /
-		maximum;
+    const int red =
+        (from_red * (maximum - amount) + to_red * amount) / maximum;
+    const int green =
+        (from_green * (maximum - amount) + to_green * amount) / maximum;
+    const int blue =
+        (from_blue * (maximum - amount) + to_blue * amount) / maximum;
 
-	return GColorFromRGB(red, green, blue);
+    return GColorFromRGB(red, green, blue);
 }
 
-static void apply_settings_colors()
+static void apply_settings(void)
 {
-	glbBackgroundColor =
-		(GColor){ .argb = glbSettings.background_argb };
-	glbBlobColor =
-		(GColor){ .argb = glbSettings.blob_argb };
-	glbValueColor =
-		(GColor){ .argb = glbSettings.value_argb };
+    s_background_color = (GColor){.argb = s_settings.background_argb};
+    s_blob_color = (GColor){.argb = s_settings.blob_argb};
+    s_value_color = (GColor){.argb = s_settings.value_argb};
 
-	if (glbWindowP)
-	{
-		window_set_background_color(
-			glbWindowP,
-			glbBackgroundColor
-		);
-	}
+    for (int coverage = 0; coverage <= 4; coverage++) {
+        s_edge_colors[coverage] = mix_colors(
+            s_background_color,
+            s_blob_color,
+            coverage,
+            4);
+    }
 
-	if (glbBlobLayerP)
-		layer_mark_dirty(glbBlobLayerP);
+    if (s_window) {
+        window_set_background_color(s_window, s_background_color);
+    }
+
+    if (s_blob_layer) {
+        layer_mark_dirty(s_blob_layer);
+    }
 }
 
-static void load_settings()
+static void load_settings(void)
 {
-	glbSettings.background_argb = GColorWhite.argb;
-	glbSettings.blob_argb = GColorBlack.argb;
-	glbSettings.value_argb = GColorWhite.argb;
+    s_settings.background_argb = GColorWhite.argb;
+    s_settings.blob_argb = GColorBlack.argb;
+    s_settings.value_argb = GColorWhite.argb;
 
-	if (
-		persist_exists(SETTINGS_PERSIST_KEY) &&
-		persist_get_size(SETTINGS_PERSIST_KEY) ==
-			(int)sizeof(glbSettings)
-	)
-	{
-		persist_read_data(
-			SETTINGS_PERSIST_KEY,
-			&glbSettings,
-			sizeof(glbSettings)
-		);
-	}
+    if (persist_exists(SETTINGS_PERSIST_KEY) &&
+        persist_get_size(SETTINGS_PERSIST_KEY) == (int)sizeof(s_settings)) {
+        persist_read_data(
+            SETTINGS_PERSIST_KEY,
+            &s_settings,
+            sizeof(s_settings));
+    }
 
-	apply_settings_colors();
+    apply_settings();
 }
 
-static void save_settings()
+static void save_settings(void)
 {
-	persist_write_data(
-		SETTINGS_PERSIST_KEY,
-		&glbSettings,
-		sizeof(glbSettings)
-	);
+    persist_write_data(
+        SETTINGS_PERSIST_KEY,
+        &s_settings,
+        sizeof(s_settings));
 }
 
 static void inbox_received_handler(
-	DictionaryIterator *iterator,
-	void *context
-)
+    DictionaryIterator *iterator,
+    void *context)
 {
-	(void)context;
+    (void)context;
 
-	Tuple *background_tuple =
-		dict_find(iterator, MESSAGE_KEY_BackgroundColor);
-	Tuple *blob_tuple =
-		dict_find(iterator, MESSAGE_KEY_BlobColor);
-	Tuple *value_tuple =
-		dict_find(iterator, MESSAGE_KEY_ValueColor);
+    bool changed = false;
+    Tuple *tuple = dict_find(iterator, MESSAGE_KEY_BackgroundColor);
 
-	if (background_tuple)
-	{
-		glbSettings.background_argb =
-			GColorFromHEX(
-				background_tuple->value->int32
-			).argb;
-	}
+    if (tuple) {
+        s_settings.background_argb =
+            GColorFromHEX(tuple->value->int32).argb;
+        changed = true;
+    }
 
-	if (blob_tuple)
-	{
-		glbSettings.blob_argb =
-			GColorFromHEX(
-				blob_tuple->value->int32
-			).argb;
-	}
+    tuple = dict_find(iterator, MESSAGE_KEY_BlobColor);
+    if (tuple) {
+        s_settings.blob_argb =
+            GColorFromHEX(tuple->value->int32).argb;
+        changed = true;
+    }
 
-	if (value_tuple)
-	{
-		glbSettings.value_argb =
-			GColorFromHEX(
-				value_tuple->value->int32
-			).argb;
-	}
+    tuple = dict_find(iterator, MESSAGE_KEY_ValueColor);
+    if (tuple) {
+        s_settings.value_argb =
+            GColorFromHEX(tuple->value->int32).argb;
+        changed = true;
+    }
 
-	save_settings();
-	apply_settings_colors();
+    if (changed) {
+        save_settings();
+        apply_settings();
+    }
 }
 
+// -----------------------------------------------------------------------------
+// Fonts and value labels
+// -----------------------------------------------------------------------------
 
-// Echtes Kanten-Antialiasing nur innerhalb eines einzelnen Pixels.
-// Die Blobfläche selbst bleibt scharf und vollständig schwarz.
-#define AA_SAMPLE_OFFSET (INT2FIX(1) / 4)
-
-// Nur ein sehr schmaler Bereich direkt an der Kontur wird geglättet.
-// Der alte Wert 1/2 war viel zu breit und konnte die Form unruhig machen.
-#define AA_CHECK_BAND (INT2FIX(1) / 10)
-
-void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK. ab hier wird gezeichnet
+static int value_font_index_for_target(int target)
 {
-	(void) me;  //vermutlich ueberfluessig
-	
-	graphics_context_set_fill_color(
-		ctx,
-		glbBackgroundColor
-	);
-	graphics_context_set_stroke_color(
-		ctx,
-		glbBlobColor
-	);
+    const int particle_count = s_target_particle_count[target];
+    const bool is_two_digit = s_target_labels[target][1] != '\0';
 
-	graphics_fill_rect(
-		ctx,
-		layer_get_bounds(me),
-		0,
-		GCornerNone
-	);
-	
-	for (int y = 0; y < HEIGHT; y++)  //Der Bildschirm wird zeilenweise berechnet
-	{
-		int nlive = 0;  //Hier zählt es, wie viele Partikel für die aktuelle Y-Zeile relevant sind
-		for (int part = 0; part < NUM_PART; part++)  //Jetzt werden alle zehn Partikel geprüft
-		{
-			int py = FIX2INT(glbPart[part].pos.y);
-			py -= y;
-			if (py < KERNEL_RAD && py > -KERNEL_RAD)
-			{
-				blob_plist[nlive++] = part;
-			}
-		}
-		
-		if (!nlive)  //Wenn kein Partikel diese Zeile beeinflussen kann, wird die restliche Berechnung für diese Zeile übersprungen
-			continue;
-		
-		// Sort plist by x
-		for (int i = 0; i < nlive-1; i++)  //Relevante Partikel nach X sortieren
-		{
-			for (int j = i+1; j < nlive; j++)
-			{
-				if (glbPart[blob_plist[i]].pos.x > glbPart[blob_plist[j]].pos.x)
-				{
-					// Out of place
-					int tmp = blob_plist[j];
-					blob_plist[j] = blob_plist[i];
-					blob_plist[i] = tmp;
-				}
-			}
-		}
-		
-		for (int i = 0; i < nlive; i++)
-			blob_plistx[i] = FIX2INT(glbPart[blob_plist[i]].pos.x);
-		
-		int sx = blob_plistx[0] - KERNEL_RAD;  //Startpunkt der X-Schleife bestimmen
-		if (sx < 0)
-			sx = 0;
-		
-		int startidx, endidx;
-		startidx = 0;
-		endidx = startidx;
-		
-		for (int x = sx; x < WIDTH; x++)
-		{
-			// Update our search range!
-			while (endidx < nlive)
-			{
-				if (blob_plistx[endidx] - KERNEL_RAD> x)
-					break;
-				endidx++;
-			}
-			while (startidx < nlive)
-			{
-				if (blob_plistx[startidx] + KERNEL_RAD > x)
-					break;
-				startidx++;
-			}
-			
-			PT2 cpos;
-			cpos.x = INT2FIX(x);
-			cpos.y = INT2FIX(y);
+    if (is_two_digit) {
+        if (particle_count <= 1) {
+            return 0; // Modak 26
+        }
+        if (particle_count == 2) {
+            return 1; // Modak 32
+        }
+        if (particle_count == 3) {
+            return 2; // Modak 36
+        }
+        return 3; // Modak 42
+    }
 
-			int totaldist = 0;
-			for (int part = startidx; part < endidx; part++)
-			{
-				totaldist += metadist(
-					glbPart[blob_plist[part]].pos,
-					cpos
-				);
-			}
+    if (particle_count <= 1) {
+        return 2; // Modak 36
+    }
+    if (particle_count == 2) {
+        return 3; // Modak 42
+    }
+    if (particle_count == 3) {
+        return 4; // Modak 48
+    }
+    return 5; // Modak 54
+}
 
-			const int threshold = INT2FIX(1);
+static void load_value_fonts(void)
+{
+    static const uint32_t resource_ids[NUM_VALUE_FONTS] = {
+        RESOURCE_ID_FONT_MODAK_26,
+        RESOURCE_ID_FONT_MODAK_32,
+        RESOURCE_ID_FONT_MODAK_36,
+        RESOURCE_ID_FONT_MODAK_42,
+        RESOURCE_ID_FONT_MODAK_48,
+        RESOURCE_ID_FONT_MODAK_54,
+    };
 
-			if (totaldist >= threshold + AA_CHECK_BAND)
-			{
-				// Klar innerhalb des Blobs: vollständig schwarz.
-				graphics_draw_pixel(ctx, GPoint(x, y));
-			}
-			else if (totaldist > threshold - AA_CHECK_BAND)
-			{
-				// Nur direkt an der mathematischen Aussenkante werden vier
-				// Unterpixel geprüft. Dadurch wird ausschliesslich der
-				// Treppeneffekt geglättet, ohne die Kontur weichzuzeichnen.
-				int covered_samples = 0;
+    for (int font_index = 0; font_index < NUM_VALUE_FONTS; font_index++) {
+        s_value_fonts[font_index] = fonts_load_custom_font(
+            resource_get_handle(resource_ids[font_index]));
 
-				const int sample_x[4] =
-				{
-					cpos.x - AA_SAMPLE_OFFSET,
-					cpos.x + AA_SAMPLE_OFFSET,
-					cpos.x - AA_SAMPLE_OFFSET,
-					cpos.x + AA_SAMPLE_OFFSET
-				};
+        for (int target = 0; target < NUM_CLOCK_BITS; target++) {
+            const GSize size = graphics_text_layout_get_content_size(
+                s_target_labels[target],
+                s_value_fonts[font_index],
+                GRect(0, 0, VALUE_LABEL_WIDTH, VALUE_LABEL_MAX_HEIGHT),
+                GTextOverflowModeFill,
+                GTextAlignmentCenter);
 
-				const int sample_y[4] =
-				{
-					cpos.y - AA_SAMPLE_OFFSET,
-					cpos.y - AA_SAMPLE_OFFSET,
-					cpos.y + AA_SAMPLE_OFFSET,
-					cpos.y + AA_SAMPLE_OFFSET
-				};
+            s_value_font_heights[target][font_index] =
+                size.h > 0 ? size.h : VALUE_LABEL_MAX_HEIGHT;
+        }
+    }
+}
 
-				for (int sample_index = 0;
-				     sample_index < 4;
-				     sample_index++)
-				{
-					PT2 sample_pos =
-					{
-						sample_x[sample_index],
-						sample_y[sample_index]
-					};
+static void unload_value_fonts(void)
+{
+    for (int index = 0; index < NUM_VALUE_FONTS; index++) {
+        if (s_value_fonts[index]) {
+            fonts_unload_custom_font(s_value_fonts[index]);
+            s_value_fonts[index] = NULL;
+        }
+    }
+}
 
-					int sample_dist = 0;
+// -----------------------------------------------------------------------------
+// Blob field calculation
+// -----------------------------------------------------------------------------
 
-					for (int part = startidx;
-					     part < endidx;
-					     part++)
-					{
-						sample_dist += metadist(
-							glbPart[blob_plist[part]].pos,
-							sample_pos
-						);
-					}
+static int blinn(int distance)
+{
+    if (distance >= INT_TO_FIX(KERNEL_RADIUS)) {
+        return 0;
+    }
 
-					if (sample_dist > threshold)
-						covered_samples++;
-				}
+    const int scaled_distance =
+        (distance * KERNEL_TABLE_RADIUS) / KERNEL_RADIUS;
+    const int kernel_index = scaled_distance >> FIX_BITS;
+    const int fraction = scaled_distance & (FIX_ONE - 1);
 
-				if (covered_samples == 4)
-				{
-					graphics_context_set_stroke_color(
-						ctx,
-						glbBlobColor
-					);
-					graphics_draw_pixel(ctx, GPoint(x, y));
-				}
+    if (kernel_index >= KERNEL_TABLE_RADIUS - 1) {
+        const int start_value = s_blinn_kernel[KERNEL_TABLE_RADIUS - 1];
+        return start_value - FIX_MULT(start_value, fraction);
+    }
+
+    const int start_value = s_blinn_kernel[kernel_index];
+    const int end_value = s_blinn_kernel[kernel_index + 1];
+
+    return start_value +
+        FIX_MULT(end_value - start_value, fraction);
+}
+
+static int particle_influence(Point2 particle_position, Point2 pixel_position)
+{
+    const int x_distance = ABS(particle_position.x - pixel_position.x);
+    const int y_distance = ABS(particle_position.y - pixel_position.y);
+
+    return FIX_MULT(blinn(x_distance), blinn(y_distance));
+}
+
+static int total_influence_at(
+    Point2 position,
+    int first_particle,
+    int end_particle)
+{
+    int total = 0;
+
+    for (int index = first_particle; index < end_particle; index++) {
+        total += particle_influence(
+            s_particles[s_row_particle_indices[index]].position,
+            position);
+    }
+
+    return total;
+}
+
+// -----------------------------------------------------------------------------
+// Rendering
+// -----------------------------------------------------------------------------
+
+static void draw_blobs(GContext *context)
+{
+    graphics_context_set_stroke_color(context, s_blob_color);
+
+    for (int y = 0; y < DISPLAY_HEIGHT; y++) {
+        int row_particle_count = 0;
+
+        for (int particle = 0; particle < NUM_PARTICLES; particle++) {
+            const int distance_y =
+                FIX_TO_INT(s_particles[particle].position.y) - y;
+
+            if (distance_y < KERNEL_RADIUS &&
+                distance_y > -KERNEL_RADIUS) {
+                s_row_particle_indices[row_particle_count++] = particle;
+            }
+        }
+
+        if (row_particle_count == 0) {
+            continue;
+        }
+
+        // Sort the relevant particles by x so each pixel only evaluates
+        // particles whose kernel can reach that position.
+        for (int left = 0; left < row_particle_count - 1; left++) {
+            for (int right = left + 1; right < row_particle_count; right++) {
+                if (s_particles[s_row_particle_indices[left]].position.x >
+                    s_particles[s_row_particle_indices[right]].position.x) {
+                    const int temp = s_row_particle_indices[right];
+                    s_row_particle_indices[right] =
+                        s_row_particle_indices[left];
+                    s_row_particle_indices[left] = temp;
+                }
+            }
+        }
+
+        for (int index = 0; index < row_particle_count; index++) {
+            s_row_particle_x[index] = FIX_TO_INT(
+                s_particles[s_row_particle_indices[index]].position.x);
+        }
+
+        int start_x = s_row_particle_x[0] - KERNEL_RADIUS;
+        if (start_x < 0) {
+            start_x = 0;
+        }
+
+        int first_particle = 0;
+        int particle_count = 0;
+
+        for (int x = start_x; x < DISPLAY_WIDTH; x++) {
+            while (particle_count < row_particle_count &&
+                   s_row_particle_x[particle_count] - KERNEL_RADIUS <= x) {
+                particle_count++;
+            }
+
+            while (first_particle < row_particle_count &&
+                   s_row_particle_x[first_particle] + KERNEL_RADIUS <= x) {
+                first_particle++;
+            }
+
+            const Point2 pixel_position = {
+                .x = INT_TO_FIX(x),
+                .y = INT_TO_FIX(y),
+            };
+
+            const int influence = total_influence_at(
+                pixel_position,
+                first_particle,
+                particle_count);
+
+            if (influence >= BLOB_THRESHOLD + AA_CHECK_BAND) {
+                graphics_draw_pixel(context, GPoint(x, y));
+                continue;
+            }
+
+            if (influence <= BLOB_THRESHOLD - AA_CHECK_BAND) {
+                continue;
+            }
+
+            int covered_samples = 0;
+
+            for (int sample = 0; sample < 4; sample++) {
+                const Point2 sample_position = {
+                    .x = pixel_position.x +
+                        s_aa_sample_x_sign[sample] * AA_SAMPLE_OFFSET,
+                    .y = pixel_position.y +
+                        s_aa_sample_y_sign[sample] * AA_SAMPLE_OFFSET,
+                };
+
+                if (total_influence_at(
+                        sample_position,
+                        first_particle,
+                        particle_count) > BLOB_THRESHOLD) {
+                    covered_samples++;
+                }
+            }
+
+            if (covered_samples == 4) {
+                graphics_draw_pixel(context, GPoint(x, y));
+            }
 #if defined(PBL_COLOR)
-				else if (covered_samples > 0)
-				{
-					// Teilabdeckung zwischen der gewählten
-					// Hintergrund- und Blobfarbe mischen.
-					GColor edge_color = mix_colors(
-						glbBackgroundColor,
-						glbBlobColor,
-						covered_samples,
-						4
-					);
-
-					graphics_context_set_stroke_color(
-						ctx,
-						edge_color
-					);
-					graphics_draw_pixel(
-						ctx,
-						GPoint(x, y)
-					);
-
-					graphics_context_set_stroke_color(
-						ctx,
-						glbBlobColor
-					);
-				}
+            else if (covered_samples > 0) {
+                graphics_context_set_stroke_color(
+                    context,
+                    s_edge_colors[covered_samples]);
+                graphics_draw_pixel(context, GPoint(x, y));
+                graphics_context_set_stroke_color(context, s_blob_color);
+            }
 #else
-				else if (covered_samples >= 2)
-				{
-					graphics_draw_pixel(ctx, GPoint(x, y));
-				}
+            else if (covered_samples >= 2) {
+                graphics_draw_pixel(context, GPoint(x, y));
+            }
 #endif
-			}
-		}
-	}
+        }
+    }
+}
 
-	// Die Werte werden erst gezeichnet, nachdem die Blobs ihre Zielpositionen
-	// erreicht haben. Danach blenden sie in etwa 0,8 Sekunden ein.
-	bool draw_labels = glbBlobsSettled && glbLabelBrightness > 0;
+static void draw_values(GContext *context)
+{
+    bool should_draw = s_blobs_settled && s_label_opacity > 0;
 
 #if !defined(PBL_COLOR)
-	// Schwarzweiss-Pebbles kennen keine echten Graustufen.
-	draw_labels = glbBlobsSettled && glbLabelBrightness >= 255;
+    should_draw =
+        s_blobs_settled && s_label_opacity >= LABEL_OPACITY_MAX;
 #endif
 
-	if (draw_labels)
-	{
-		GColor label_color = mix_colors(
-			glbBlobColor,
-			glbValueColor,
-			glbLabelBrightness,
-			255
-		);
+    if (!should_draw) {
+        return;
+    }
 
-		graphics_context_set_text_color(ctx, label_color);
+    const GColor label_color = mix_colors(
+        s_blob_color,
+        s_value_color,
+        s_label_opacity,
+        LABEL_OPACITY_MAX);
 
-#if defined(PBL_PLATFORM_EMERY)
-		const int label_width = 104;
-		const int max_label_height = 80;
-#else
-		const int label_width = 72;
-		const int max_label_height = 58;
-#endif
+    graphics_context_set_text_color(context, label_color);
 
-		for (int target = 0; target < NUM_CLOCKBITS; target++)
-		{
-			if (!glbActiveTargets[target])
-				continue;
+    for (int target = 0; target < NUM_CLOCK_BITS; target++) {
+        if (!s_active_targets[target]) {
+            continue;
+        }
 
-			int font_index = value_font_index_for_target(target);
-			GFont value_font = glbValueFonts[font_index];
+        const int font_index = value_font_index_for_target(target);
+        const int text_height =
+            s_value_font_heights[target][font_index];
 
-			// Die Schriftgroesse ändert sich mit der Blobgroesse.
-			// Darum darf die Oberkante des Textfeldes nicht für alle Fonts
-			// gleich sein: Kleine Fonts würden sonst höher, grosse tiefer sitzen.
-			// Pebble misst hier für genau diesen Text und genau diesen Font
-			// zunächst die tatsächliche Zeilenhöhe.
-			GSize text_size =
-				graphics_text_layout_get_content_size(
-					glbTargetLabels[target],
-					value_font,
-					GRect(
-						0,
-						0,
-						label_width,
-						max_label_height
-					),
-					GTextOverflowModeFill,
-					GTextAlignmentCenter
-				);
+        const GRect text_bounds = GRect(
+            s_clock_targets[target].x - VALUE_LABEL_WIDTH / 2,
+            s_clock_targets[target].y - text_height / 2 +
+                VALUE_OPTICAL_Y_OFFSET,
+            VALUE_LABEL_WIDTH,
+            text_height + 2);
 
-			int draw_height = text_size.h;
-
-			if (draw_height < 1)
-				draw_height = max_label_height;
-
-			// Nun wird die gemessene Textzeile um den Zielpunkt des Blobs
-			// zentriert. Damit sitzt jede Schriftgroesse auf derselben Mitte.
-			// Nach der dynamischen Zentrierung sitzt Modak optisch noch
-			// minimal zu tief. Dieser gemeinsame Offset verschiebt alle
-			// Schriftgroessen gleichmaessig 3 Pixel nach oben.
-			const int optical_y_offset = -8;
-
-			GRect text_bounds = GRect(
-				glbTargets[target].x - label_width / 2,
-				glbTargets[target].y - draw_height / 2
-					+ optical_y_offset,
-				label_width,
-				draw_height + 2
-			);
-
-			graphics_draw_text(
-				ctx,
-				glbTargetLabels[target],
-				value_font,
-				text_bounds,
-				GTextOverflowModeFill,
-				GTextAlignmentCenter,
-				NULL
-			);
-		}
-	}
-
-}
-void handle_init() 
-{
-	glbValueFonts[0] = fonts_load_custom_font(
-		resource_get_handle(RESOURCE_ID_FONT_MODAK_26)
-	);
-	glbValueFonts[1] = fonts_load_custom_font(
-		resource_get_handle(RESOURCE_ID_FONT_MODAK_32)
-	);
-	glbValueFonts[2] = fonts_load_custom_font(
-		resource_get_handle(RESOURCE_ID_FONT_MODAK_36)
-	);
-	glbValueFonts[3] = fonts_load_custom_font(
-		resource_get_handle(RESOURCE_ID_FONT_MODAK_42)
-	);
-	glbValueFonts[4] = fonts_load_custom_font(
-		resource_get_handle(RESOURCE_ID_FONT_MODAK_48)
-	);
-	glbValueFonts[5] = fonts_load_custom_font(
-		resource_get_handle(RESOURCE_ID_FONT_MODAK_54)
-	);
-
-	glbWindowP = window_create();
-	
-	load_settings();
-
-	window_stack_push(glbWindowP, true /* Animated */);
-	window_set_background_color(
-		glbWindowP,
-		glbBackgroundColor
-	);
-	
-	glbBlobLayerP = layer_create(
-		layer_get_frame(window_get_root_layer(glbWindowP)));
-	layer_set_update_proc(glbBlobLayerP, &bloblayer_update);
-	layer_add_child(window_get_root_layer(glbWindowP), glbBlobLayerP);
-	
-
-	app_message_register_inbox_received(
-		inbox_received_handler
-	);
-	app_message_open(128, 128);
-
-	rand_seed();
-	for (int part = 0; part < NUM_PART; part++)
-	{
-		glbPart[part].pos.x = rand_choice(INT2FIX(WIDTH));
-		glbPart[part].pos.y = rand_choice(INT2FIX(HEIGHT));
-		glbPart[part].vel.x = INT2FIX(rand_range(-3, 3));
-		glbPart[part].vel.y = INT2FIX(rand_range(-3, 3));
-	}
-	
-	glbLive = true;
-	glbBlobsSettled = false;
-	glbLabelBrightness = 0;
-	app_timer_register(REFRESH_RATE, handle_timer, 0);
-	glbTimerRunning = true;
-	
-	layer_mark_dirty(glbBlobLayerP);
+        graphics_draw_text(
+            context,
+            s_target_labels[target],
+            s_value_fonts[font_index],
+            text_bounds,
+            GTextOverflowModeFill,
+            GTextAlignmentCenter,
+            NULL);
+    }
 }
 
-void handle_deinit() 
+static void blob_layer_update(Layer *layer, GContext *context)
 {
-	for (int font_index = 0;
-	     font_index < NUM_VALUE_FONTS;
-	     font_index++)
-	{
-		if (glbValueFonts[font_index])
-		{
-			fonts_unload_custom_font(
-				glbValueFonts[font_index]
-			);
-			glbValueFonts[font_index] = NULL;
-		}
-	}
+    graphics_context_set_fill_color(context, s_background_color);
+    graphics_fill_rect(
+        context,
+        layer_get_bounds(layer),
+        0,
+        GCornerNone);
 
-	app_message_deregister_callbacks();
-
-	window_destroy(glbWindowP);
-	glbWindowP = 0;
-	layer_destroy(glbBlobLayerP);
-	glbBlobLayerP = 0;
+    draw_blobs(context);
+    draw_values(context);
 }
 
-void
-part_bounce(PART *part)
+// -----------------------------------------------------------------------------
+// Particle physics
+// -----------------------------------------------------------------------------
+
+static void bounce_particle(Particle *particle)
 {
-	if (part->pos.x < 0)
-	{
-		part->vel.x = ABS(part->vel.x);
-		part->pos.x = -part->pos.x;
-	}
-	else if (part->pos.x > INT2FIX(WIDTH))
-	{
-		part->vel.x = -ABS(part->vel.x);
-		part->pos.x = INT2FIX(2*WIDTH)-part->pos.x;
-	}
-	if (part->pos.y < 0)
-	{
-		part->vel.y = ABS(part->vel.y);
-		part->pos.y = -part->pos.y;
-	}
-	else if (part->pos.y > INT2FIX(HEIGHT))
-	{
-		part->vel.y = -ABS(part->vel.y);
-		part->pos.y = INT2FIX(2*HEIGHT)-part->pos.y;
-	}
+    if (particle->position.x < 0) {
+        particle->velocity.x = ABS(particle->velocity.x);
+        particle->position.x = -particle->position.x;
+    } else if (particle->position.x > INT_TO_FIX(DISPLAY_WIDTH)) {
+        particle->velocity.x = -ABS(particle->velocity.x);
+        particle->position.x =
+            INT_TO_FIX(2 * DISPLAY_WIDTH) - particle->position.x;
+    }
+
+    if (particle->position.y < 0) {
+        particle->velocity.y = ABS(particle->velocity.y);
+        particle->position.y = -particle->position.y;
+    } else if (particle->position.y > INT_TO_FIX(DISPLAY_HEIGHT)) {
+        particle->velocity.y = -ABS(particle->velocity.y);
+        particle->position.y =
+            INT_TO_FIX(2 * DISPLAY_HEIGHT) - particle->position.y;
+    }
 }
 
-void
-part_forces(PART *part, int pidx)
+static void apply_particle_forces(Particle *particle, int particle_index)
 {
-	PT2 targetforce;
-	targetforce = glbPartTargets[pidx];
-	targetforce.x = INT2FIX(targetforce.x);
-	targetforce.y = INT2FIX(targetforce.y);
-	pt_sub(&targetforce, part->pos);
-	int			len;
-	len = MAX(ABS(targetforce.x), ABS(targetforce.y));
-	pt_normalize(&targetforce);
-	if (len < INT2FIX(4))
-	{
-		targetforce.x >>= 2;
-		targetforce.y >>= 2;
-	}
-	
-	pt_add(&part->vel, targetforce);
-	
-	PT2 dragforce;
-	dragforce.x = 0.8 * (INT2FIX(1));
-	dragforce.y = 0.8 * (INT2FIX(1));
-	pt_mul(&part->vel, dragforce);
+    Point2 target_force = {
+        .x = INT_TO_FIX(s_particle_targets[particle_index].x),
+        .y = INT_TO_FIX(s_particle_targets[particle_index].y),
+    };
+
+    point_subtract(&target_force, particle->position);
+
+    const int distance = MAX(
+        ABS(target_force.x),
+        ABS(target_force.y));
+
+    point_normalize(&target_force);
+
+    if (distance < INT_TO_FIX(4)) {
+        target_force.x >>= 2;
+        target_force.y >>= 2;
+    }
+
+    point_add(&particle->velocity, target_force);
+
+    const Point2 drag = {
+        .x = (FIX_ONE * 4) / 5,
+        .y = (FIX_ONE * 4) / 5,
+    };
+    point_multiply(&particle->velocity, drag);
 }
 
-bool
-part_integrate()
+static bool integrate_particles(void)
 {
-	// Integrate!
-	for (int pidx= 0; pidx < NUM_PART; pidx++)
-	{
-		PART *part = &glbPart[pidx];
-		pt_add(&part->pos, part->vel);
-		
-		part_bounce(part);
-		
-		part_forces(part, pidx);
-		
-//		part->pos.x = INT2FIX(glbPartTargets[pidx].x);
-//		part->pos.y = INT2FIX(glbPartTargets[pidx].y);
-	}
-	
-	// Check to see if we are on target!
-	for (int pidx = 0; pidx < NUM_PART; pidx++)
-	{
-		if (FIX2INT(glbPart[pidx].pos.x) != glbPartTargets[pidx].x)
-			return true;
-		if (FIX2INT(glbPart[pidx].pos.y) != glbPartTargets[pidx].y)
-			return true;
-	}
-	
-	return false;
+    for (int index = 0; index < NUM_PARTICLES; index++) {
+        Particle *particle = &s_particles[index];
+
+        point_add(&particle->position, particle->velocity);
+        bounce_particle(particle);
+        apply_particle_forces(particle, index);
+    }
+
+    for (int index = 0; index < NUM_PARTICLES; index++) {
+        if (FIX_TO_INT(s_particles[index].position.x) !=
+                s_particle_targets[index].x ||
+            FIX_TO_INT(s_particles[index].position.y) !=
+                s_particle_targets[index].y) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
-void
-handle_tick(struct tm *tick_time, TimeUnits units_chnnged)
+static void initialize_particles(void)
 {
-	// Set our targets.
-	if (tick_time->tm_min == glbTargetMinute)
-		return;
-	
-	glbTargetMinute = tick_time->tm_min;
+    rand_seed();
 
-	// Bei einer neuen Minute verschwinden die Zahlen sofort. Sie werden erst
-	// wieder eingeblendet, wenn alle Partikel ihre neuen Ziele erreicht haben.
-	glbBlobsSettled = false;
-	glbLabelBrightness = 0;
-	
-	int 	ntarget = 0;
-	static int		targets[NUM_CLOCKBITS];
-	int hour = tick_time->tm_hour;
-
-	for (int target = 0; target < NUM_CLOCKBITS; target++)
-	{
-		glbActiveTargets[target] = false;
-		glbTargetParticleCount[target] = 0;
-	}
-	
-	if (hour > 12)
-		hour -= 12;
-	
-	for (int bit = 0; bit < 4; bit++)
-{
-	if (hour & (1 << (3-bit)))
-	{
-		targets[ntarget++] = bit;
-		glbActiveTargets[bit] = true;
-	}
-}
-	for (int bit = 0; bit < 6; bit++)
-{
-	if (tick_time->tm_min & (1 << (5-bit)))
-	{
-		int target = bit + 4;
-
-		targets[ntarget++] = target;
-		glbActiveTargets[target] = true;
-	}
-}
-	
-	// Assign targets.
-	// If no targets, it is midnight/noon, scatter!
-	if (!ntarget)
-	{
-		for (int part = 0; part < NUM_PART; part++)
-		{
-			glbPartTargets[part].x = rand_choice((WIDTH));
-			glbPartTargets[part].y = rand_choice((HEIGHT));
-		}
-	}
-	else
-	{
-		// First assign each target to one particles.
-		static int partlist[NUM_PART];
-		for (int part = 0; part < NUM_PART; part++)
-			partlist[part] = part;
-		
-		for (int i = 0; i < ntarget; i++)
-		{
-			// Find a random particle..
-			int pidx = rand_choice(NUM_PART - i);
-			
-			// Swap...
-			int tmp = partlist[pidx+i];
-			partlist[pidx+i] = partlist[i];
-			partlist[i] = tmp;
-			
-			int target = targets[i];
-			glbPartTargets[partlist[i]] = glbTargets[target];
-			glbTargetParticleCount[target]++;
-		}
-		// Remaining particles get a random target.
-		for (int i = ntarget; i < NUM_PART; i++)
-		{
-			int t = rand_choice(ntarget);
-			int target = targets[t];
-
-			glbPartTargets[partlist[i]] = glbTargets[target];
-			glbTargetParticleCount[target]++;
-		}
-	}
-	
-	glbLive = true;
-
-	if (!glbTimerRunning)
-	{
-		app_timer_register(REFRESH_RATE, handle_timer, 0);
-		glbTimerRunning = true;
-	}
-	
-	layer_mark_dirty(glbBlobLayerP);
+    for (int index = 0; index < NUM_PARTICLES; index++) {
+        s_particles[index].position.x =
+            rand_choice(INT_TO_FIX(DISPLAY_WIDTH));
+        s_particles[index].position.y =
+            rand_choice(INT_TO_FIX(DISPLAY_HEIGHT));
+        s_particles[index].velocity.x =
+            INT_TO_FIX(rand_range(-3, 3));
+        s_particles[index].velocity.y =
+            INT_TO_FIX(rand_range(-3, 3));
+    }
 }
 
-void
-handle_timer(void *data)
+// -----------------------------------------------------------------------------
+// Clock target assignment
+// -----------------------------------------------------------------------------
+
+static int collect_active_targets(
+    const struct tm *tick_time,
+    int active_targets[NUM_CLOCK_BITS])
 {
-	(void)data;
+    for (int target = 0; target < NUM_CLOCK_BITS; target++) {
+        s_active_targets[target] = false;
+        s_target_particle_count[target] = 0;
+    }
 
-	// Der gerade ausgeführte Timer ist nun verbraucht.
-	glbTimerRunning = false;
+    int active_count = 0;
+    int hour = tick_time->tm_hour;
 
-	bool continue_timer = false;
+    if (hour > 12) {
+        hour -= 12;
+    }
 
-	if (!glbBlobsSettled)
-	{
-		glbLive = part_integrate();
+    for (int bit = 0; bit < 4; bit++) {
+        if (hour & (1 << (3 - bit))) {
+            active_targets[active_count++] = bit;
+            s_active_targets[bit] = true;
+        }
+    }
 
-		// Solange die Blobs unterwegs sind, werden überhaupt keine Zahlen gezeichnet.
-		glbLabelBrightness = 0;
+    for (int bit = 0; bit < 6; bit++) {
+        if (tick_time->tm_min & (1 << (5 - bit))) {
+            const int target = bit + 4;
+            active_targets[active_count++] = target;
+            s_active_targets[target] = true;
+        }
+    }
 
-		if (glbLive)
-		{
-			continue_timer = true;
-		}
-		else
-		{
-			// Ab jetzt werden die Partikel nicht mehr weiter integriert.
-			// Dadurch bleiben die Blobs während des Einblendens exakt stehen.
-			glbBlobsSettled = true;
-			glbLive = false;
-			continue_timer = true;
-		}
-	}
-	else if (glbLabelBrightness < 255)
-	{
-		// Erst bei vollständig stillstehenden Blobs langsam einblenden.
-		glbLabelBrightness += LABEL_FADE_STEP;
-
-		if (glbLabelBrightness > 255)
-			glbLabelBrightness = 255;
-
-		continue_timer = glbLabelBrightness < 255;
-	}
-
-	if (continue_timer)
-	{
-		app_timer_register(REFRESH_RATE, handle_timer, 0);
-		glbTimerRunning = true;
-	}
-
-	layer_mark_dirty(glbBlobLayerP);
+    return active_count;
 }
 
-
-int 
-main() 
+static void scatter_particle_targets(void)
 {
-	handle_init();
-	tick_timer_service_subscribe(SECOND_UNIT, handle_tick);
-	app_event_loop();
-	handle_deinit();
+    for (int particle = 0; particle < NUM_PARTICLES; particle++) {
+        s_particle_targets[particle].x = rand_choice(DISPLAY_WIDTH);
+        s_particle_targets[particle].y = rand_choice(DISPLAY_HEIGHT);
+    }
+}
+
+static void assign_particle_targets(
+    const int active_targets[NUM_CLOCK_BITS],
+    int active_count)
+{
+    if (active_count == 0) {
+        scatter_particle_targets();
+        return;
+    }
+
+    int particle_list[NUM_PARTICLES];
+    for (int particle = 0; particle < NUM_PARTICLES; particle++) {
+        particle_list[particle] = particle;
+    }
+
+    // Give every active clock target at least one particle.
+    for (int index = 0; index < active_count; index++) {
+        const int random_index = index +
+            rand_choice(NUM_PARTICLES - index);
+
+        const int temp = particle_list[random_index];
+        particle_list[random_index] = particle_list[index];
+        particle_list[index] = temp;
+
+        const int target = active_targets[index];
+        s_particle_targets[particle_list[index]] = s_clock_targets[target];
+        s_target_particle_count[target]++;
+    }
+
+    // Distribute all remaining particles among the active targets.
+    for (int index = active_count; index < NUM_PARTICLES; index++) {
+        const int target = active_targets[rand_choice(active_count)];
+        s_particle_targets[particle_list[index]] = s_clock_targets[target];
+        s_target_particle_count[target]++;
+    }
+}
+
+static void schedule_animation_timer(void)
+{
+    if (!s_animation_timer) {
+        s_animation_timer = app_timer_register(
+            REFRESH_RATE_MS,
+            animation_timer_callback,
+            NULL);
+    }
+}
+
+static void tick_handler(struct tm *tick_time, TimeUnits units_changed)
+{
+    (void)units_changed;
+
+    if (tick_time->tm_hour == s_target_hour &&
+        tick_time->tm_min == s_target_minute) {
+        return;
+    }
+
+    s_target_hour = tick_time->tm_hour;
+    s_target_minute = tick_time->tm_min;
+    s_blobs_settled = false;
+    s_label_opacity = 0;
+
+    int active_targets[NUM_CLOCK_BITS];
+    const int active_count = collect_active_targets(
+        tick_time,
+        active_targets);
+
+    assign_particle_targets(active_targets, active_count);
+    schedule_animation_timer();
+    layer_mark_dirty(s_blob_layer);
+}
+
+// -----------------------------------------------------------------------------
+// Animation
+// -----------------------------------------------------------------------------
+
+static void animation_timer_callback(void *context)
+{
+    (void)context;
+    s_animation_timer = NULL;
+
+    bool continue_animation = false;
+
+    if (!s_blobs_settled) {
+        const bool particles_are_moving = integrate_particles();
+        s_label_opacity = 0;
+
+        if (particles_are_moving) {
+            continue_animation = true;
+        } else {
+            s_blobs_settled = true;
+            continue_animation = true;
+        }
+    } else if (s_label_opacity < LABEL_OPACITY_MAX) {
+        s_label_opacity += LABEL_FADE_STEP;
+
+        if (s_label_opacity > LABEL_OPACITY_MAX) {
+            s_label_opacity = LABEL_OPACITY_MAX;
+        }
+
+        continue_animation = s_label_opacity < LABEL_OPACITY_MAX;
+    }
+
+    if (continue_animation) {
+        schedule_animation_timer();
+    }
+
+    layer_mark_dirty(s_blob_layer);
+}
+
+// -----------------------------------------------------------------------------
+// Lifecycle
+// -----------------------------------------------------------------------------
+
+static void initialize_current_time(void)
+{
+    const time_t now = time(NULL);
+    struct tm *current_time = localtime(&now);
+
+    if (current_time) {
+        tick_handler(current_time, MINUTE_UNIT);
+    } else {
+        scatter_particle_targets();
+        schedule_animation_timer();
+    }
+}
+
+static void app_initialize(void)
+{
+    load_settings();
+    load_value_fonts();
+
+    s_window = window_create();
+    window_set_background_color(s_window, s_background_color);
+
+    Layer *root_layer = window_get_root_layer(s_window);
+    s_blob_layer = layer_create(layer_get_bounds(root_layer));
+    layer_set_update_proc(s_blob_layer, blob_layer_update);
+    layer_add_child(root_layer, s_blob_layer);
+
+    app_message_register_inbox_received(inbox_received_handler);
+    app_message_open(APP_MESSAGE_BUFFER_SIZE, APP_MESSAGE_BUFFER_SIZE);
+
+    initialize_particles();
+
+    window_stack_push(s_window, true);
+
+    tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+    initialize_current_time();
+}
+
+static void app_deinitialize(void)
+{
+    tick_timer_service_unsubscribe();
+    app_message_deregister_callbacks();
+
+    if (s_animation_timer) {
+        app_timer_cancel(s_animation_timer);
+        s_animation_timer = NULL;
+    }
+
+    if (s_blob_layer) {
+        layer_destroy(s_blob_layer);
+        s_blob_layer = NULL;
+    }
+
+    if (s_window) {
+        window_destroy(s_window);
+        s_window = NULL;
+    }
+
+    unload_value_fonts();
+}
+
+int main(void)
+{
+    app_initialize();
+    app_event_loop();
+    app_deinitialize();
 }
