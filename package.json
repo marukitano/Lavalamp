@@ -8,12 +8,14 @@
     "binary-clock"
   ],
   "private": true,
-  "dependencies": {},
+  "dependencies": {
+    "@rebble/clay": "^1.0.10"
+  },
   "pebble": {
     "displayName": "Lavalamp",
     "uuid": "730591b1-1bdd-4183-8fed-400676f42e97",
     "sdkVersion": "3",
-    "enableMultiJS": false,
+    "enableMultiJS": true,
     "targetPlatforms": [
       "aplite",
       "basalt",
@@ -24,7 +26,11 @@
     "watchapp": {
       "watchface": true
     },
-    "messageKeys": [],
+    "messageKeys": [
+      "BackgroundColor",
+      "BlobColor",
+      "ValueColor"
+    ],
     "resources": {
       "media": [
         {
@@ -64,6 +70,9 @@
           "characterRegex": "[0-9]"
         }
       ]
-    }
+    },
+    "capabilities": [
+      "configurable"
+    ]
   }
 }

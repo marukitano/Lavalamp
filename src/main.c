@@ -11,6 +11,22 @@ Layer *glbBlobLayerP;  //Pointer auf die Zeichenebene, auf der die Blobs gerende
 // Pebble kann einen geladenen Font nicht stufenlos skalieren.
 GFont glbValueFonts[NUM_VALUE_FONTS];
 
+
+#define SETTINGS_PERSIST_KEY 1
+
+typedef struct
+{
+	uint8_t background_argb;
+	uint8_t blob_argb;
+	uint8_t value_argb;
+} LavalampSettings;
+
+LavalampSettings glbSettings;
+
+GColor glbBackgroundColor;
+GColor glbBlobColor;
+GColor glbValueColor;
+
 bool glbLive = false; //merkt sich, ob sich die Partikel noch bewegen
 bool glbBlobsSettled = false; //true, sobald alle Blobs ihre Zielposition erreicht haben
 bool glbTimerRunning = false; //verhindert, dass mehrere Animationstimer gleichzeitig laufen
@@ -265,6 +281,140 @@ int metadist(PT2 a, PT2 b)  //Einfluss eines Partikels auf einen Pixel
 static int blob_plist[NUM_PART];  //Hilfsarrays für das Rendern
 static int blob_plistx[NUM_PART];  //Hilfsarrays für das Rendern
 
+static int color_component(GColor color, int shift)
+{
+	return ((color.argb >> shift) & 0x03) * 85;
+}
+
+static GColor mix_colors(
+	GColor from_color,
+	GColor to_color,
+	int amount,
+	int maximum
+)
+{
+	if (amount <= 0)
+		return from_color;
+
+	if (amount >= maximum)
+		return to_color;
+
+	int from_red = color_component(from_color, 4);
+	int from_green = color_component(from_color, 2);
+	int from_blue = color_component(from_color, 0);
+
+	int to_red = color_component(to_color, 4);
+	int to_green = color_component(to_color, 2);
+	int to_blue = color_component(to_color, 0);
+
+	int red =
+		(from_red * (maximum - amount) + to_red * amount) /
+		maximum;
+	int green =
+		(from_green * (maximum - amount) + to_green * amount) /
+		maximum;
+	int blue =
+		(from_blue * (maximum - amount) + to_blue * amount) /
+		maximum;
+
+	return GColorFromRGB(red, green, blue);
+}
+
+static void apply_settings_colors()
+{
+	glbBackgroundColor =
+		(GColor){ .argb = glbSettings.background_argb };
+	glbBlobColor =
+		(GColor){ .argb = glbSettings.blob_argb };
+	glbValueColor =
+		(GColor){ .argb = glbSettings.value_argb };
+
+	if (glbWindowP)
+	{
+		window_set_background_color(
+			glbWindowP,
+			glbBackgroundColor
+		);
+	}
+
+	if (glbBlobLayerP)
+		layer_mark_dirty(glbBlobLayerP);
+}
+
+static void load_settings()
+{
+	glbSettings.background_argb = GColorWhite.argb;
+	glbSettings.blob_argb = GColorBlack.argb;
+	glbSettings.value_argb = GColorWhite.argb;
+
+	if (
+		persist_exists(SETTINGS_PERSIST_KEY) &&
+		persist_get_size(SETTINGS_PERSIST_KEY) ==
+			(int)sizeof(glbSettings)
+	)
+	{
+		persist_read_data(
+			SETTINGS_PERSIST_KEY,
+			&glbSettings,
+			sizeof(glbSettings)
+		);
+	}
+
+	apply_settings_colors();
+}
+
+static void save_settings()
+{
+	persist_write_data(
+		SETTINGS_PERSIST_KEY,
+		&glbSettings,
+		sizeof(glbSettings)
+	);
+}
+
+static void inbox_received_handler(
+	DictionaryIterator *iterator,
+	void *context
+)
+{
+	(void)context;
+
+	Tuple *background_tuple =
+		dict_find(iterator, MESSAGE_KEY_BackgroundColor);
+	Tuple *blob_tuple =
+		dict_find(iterator, MESSAGE_KEY_BlobColor);
+	Tuple *value_tuple =
+		dict_find(iterator, MESSAGE_KEY_ValueColor);
+
+	if (background_tuple)
+	{
+		glbSettings.background_argb =
+			GColorFromHEX(
+				background_tuple->value->int32
+			).argb;
+	}
+
+	if (blob_tuple)
+	{
+		glbSettings.blob_argb =
+			GColorFromHEX(
+				blob_tuple->value->int32
+			).argb;
+	}
+
+	if (value_tuple)
+	{
+		glbSettings.value_argb =
+			GColorFromHEX(
+				value_tuple->value->int32
+			).argb;
+	}
+
+	save_settings();
+	apply_settings_colors();
+}
+
+
 // Echtes Kanten-Antialiasing nur innerhalb eines einzelnen Pixels.
 // Die Blobfläche selbst bleibt scharf und vollständig schwarz.
 #define AA_SAMPLE_OFFSET (INT2FIX(1) / 4)
@@ -277,20 +427,21 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 {
 	(void) me;  //vermutlich ueberfluessig
 	
-	// Useful for debugging that the timer shuts down
-//	if (glbLive)
-	if (1)  //immer true, daher ist else sinnlos
-	{
-		graphics_context_set_fill_color(ctx, GColorWhite);
-		graphics_context_set_stroke_color(ctx, GColorBlack);
-	}
-	else
-	{
-		graphics_context_set_fill_color(ctx, GColorBlack);
-		graphics_context_set_stroke_color(ctx, GColorWhite);
-	}
-	
-	graphics_fill_rect(ctx, layer_get_frame(me), 0, 0);  //Hier wird die gesamte Zeichenfläche mit der aktuellen Füllfarbe ausgefüllt
+	graphics_context_set_fill_color(
+		ctx,
+		glbBackgroundColor
+	);
+	graphics_context_set_stroke_color(
+		ctx,
+		glbBlobColor
+	);
+
+	graphics_fill_rect(
+		ctx,
+		layer_get_bounds(me),
+		0,
+		GCornerNone
+	);
 	
 	for (int y = 0; y < HEIGHT; y++)  //Der Bildschirm wird zeilenweise berechnet
 	{
@@ -423,33 +574,34 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 				{
 					graphics_context_set_stroke_color(
 						ctx,
-						GColorBlack
+						glbBlobColor
 					);
 					graphics_draw_pixel(ctx, GPoint(x, y));
 				}
 #if defined(PBL_COLOR)
 				else if (covered_samples > 0)
 				{
-					// Ein einziger grauer Randpixel bildet die berechnete
-					// Teilabdeckung ab. Es gibt keinen breiten weichen Saum.
-					int gray;
-
-					if (covered_samples == 3)
-						gray = 85;
-					else if (covered_samples == 2)
-						gray = 128;
-					else
-						gray = 170;
-
-					graphics_context_set_stroke_color(
-						ctx,
-						GColorFromRGB(gray, gray, gray)
+					// Teilabdeckung zwischen der gewählten
+					// Hintergrund- und Blobfarbe mischen.
+					GColor edge_color = mix_colors(
+						glbBackgroundColor,
+						glbBlobColor,
+						covered_samples,
+						4
 					);
-					graphics_draw_pixel(ctx, GPoint(x, y));
 
 					graphics_context_set_stroke_color(
 						ctx,
-						GColorBlack
+						edge_color
+					);
+					graphics_draw_pixel(
+						ctx,
+						GPoint(x, y)
+					);
+
+					graphics_context_set_stroke_color(
+						ctx,
+						glbBlobColor
 					);
 				}
 #else
@@ -473,15 +625,12 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 
 	if (draw_labels)
 	{
-#if defined(PBL_COLOR)
-		GColor label_color = GColorFromRGB(
+		GColor label_color = mix_colors(
+			glbBlobColor,
+			glbValueColor,
 			glbLabelBrightness,
-			glbLabelBrightness,
-			glbLabelBrightness
+			255
 		);
-#else
-		GColor label_color = GColorWhite;
-#endif
 
 		graphics_context_set_text_color(ctx, label_color);
 
@@ -530,7 +679,7 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 			// Nach der dynamischen Zentrierung sitzt Modak optisch noch
 			// minimal zu tief. Dieser gemeinsame Offset verschiebt alle
 			// Schriftgroessen gleichmaessig 3 Pixel nach oben.
-			const int optical_y_offset = -5;
+			const int optical_y_offset = -8;
 
 			GRect text_bounds = GRect(
 				glbTargets[target].x - label_width / 2,
@@ -576,14 +725,25 @@ void handle_init()
 
 	glbWindowP = window_create();
 	
+	load_settings();
+
 	window_stack_push(glbWindowP, true /* Animated */);
-	window_set_background_color(glbWindowP, GColorWhite);
+	window_set_background_color(
+		glbWindowP,
+		glbBackgroundColor
+	);
 	
 	glbBlobLayerP = layer_create(
 		layer_get_frame(window_get_root_layer(glbWindowP)));
 	layer_set_update_proc(glbBlobLayerP, &bloblayer_update);
 	layer_add_child(window_get_root_layer(glbWindowP), glbBlobLayerP);
 	
+
+	app_message_register_inbox_received(
+		inbox_received_handler
+	);
+	app_message_open(128, 128);
+
 	rand_seed();
 	for (int part = 0; part < NUM_PART; part++)
 	{
@@ -616,6 +776,8 @@ void handle_deinit()
 			glbValueFonts[font_index] = NULL;
 		}
 	}
+
+	app_message_deregister_callbacks();
 
 	window_destroy(glbWindowP);
 	glbWindowP = 0;
