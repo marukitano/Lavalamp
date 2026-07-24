@@ -6,10 +6,17 @@
 Window *glbWindowP;  //globaler Pointer auf das Hauptfenster der App
 Layer *glbBlobLayerP;  //Pointer auf die Zeichenebene, auf der die Blobs gerendert werden.
 
-bool glbLive  = false; //merkt sich, ob die schnelle Animation noch laeuft (batterieeffizienz)
+bool glbLive = false; //merkt sich, ob sich die Partikel noch bewegen
+bool glbBlobsSettled = false; //true, sobald alle Blobs ihre Zielposition erreicht haben
+bool glbTimerRunning = false; //verhindert, dass mehrere Animationstimer gleichzeitig laufen
 
-#define WIDTH 144  //aufloesung der alten Pebble time
-#define HEIGHT 168  //aufloesung der alten Pebble time
+// Helligkeit der Zahlen: 0 = unsichtbar, 255 = vollständig sichtbar.
+int glbLabelBrightness = 0;
+
+// Verwendet automatisch die Aufloesung der jeweiligen Pebble.
+// Auf der Pebble Time 2 (Emery) sind das 200 x 228 Pixel.
+#define WIDTH PBL_DISPLAY_WIDTH
+#define HEIGHT PBL_DISPLAY_HEIGHT
 	
 typedef struct //strukt mit 2 ganzzahlen
 {
@@ -82,41 +89,56 @@ typedef struct //Ein PART besitzt position (x,y) und geschwindigkeit (x,y)
 	
 PART		glbPart[NUM_PART];
 
-#define KERNEL_RAD 40  //Jedes Partikel beeinflusst Pixel in einem Radius von maximal 40 Pixeln
+#define KERNEL_TABLE_RAD 40  //Die ursprüngliche Einflusskurve besitzt 40 Werte
+
+// Der Blobradius wird proportional zur gesamten Displaygroesse skaliert.
+// 144 x 168 ergibt weiterhin 40 Pixel, 200 x 228 ergibt 55 Pixel.
+#define KERNEL_RAD \
+	((KERNEL_TABLE_RAD * (WIDTH + HEIGHT) + 156) / 312)
 	
-#define REFRESH_RATE 50  //Während der Animation erfolgt ungefähr alle 50 Millisekunden ein Update (20 bilder\sek)
-#define INTEGRATE_TIMER_ID 1  //Aktuell nicht in verwendung
+#define REFRESH_RATE 50  //Während der Animation erfolgt ungefähr alle 50 Millisekunden ein Update (20 Bilder/Sekunde)
+#define LABEL_FADE_STEP 16  //16 Schritte à 50 ms ergeben ungefähr 0,8 Sekunden Einblendzeit
+#define INTEGRATE_TIMER_ID 1  //Aktuell nicht in Verwendung
 	
 #define NUM_CLOCKBITS 10  //anzahl Clockbits
-	
-#define CENTER_X 72  //bildschirmmitte
-#define CENTER_Y 84  //bildschirmmitte
-#define GRID_SPACING 10  //Grid, mit dem die Blobs angeordnet werden
-	
+
+// Die ursprünglichen Zielpositionen wurden für ein Display mit 144 x 168
+// Pixeln entworfen. Diese Makros skalieren jede Position proportional auf
+// die tatsächliche Displaygroesse.
+#define ORIGINAL_WIDTH 144
+#define ORIGINAL_HEIGHT 168
+#define SCALE_X(value) ((value) * WIDTH / ORIGINAL_WIDTH)
+#define SCALE_Y(value) ((value) * HEIGHT / ORIGINAL_HEIGHT)
+
 int glbTargetMinute = -1;  //speichert die zuletzt verarbeitete Minute. Der Startwert -1 ist absichtlich ungültig. Dadurch wird beim Start garantiert die aktuelle Uhrzeit verarbeitet
-	
-const PT2 glbTargets[NUM_CLOCKBITS] = //die blobpositionen im Grid
+
+const PT2 glbTargets[NUM_CLOCKBITS] = //proportional skalierte Blobpositionen
 {
-	// Hour bits, high to low
-	{ CENTER_X - 4.5 * GRID_SPACING, CENTER_Y - 4 * GRID_SPACING },
-	{ CENTER_X - 1.5 * GRID_SPACING, CENTER_Y - 6 * GRID_SPACING },
-	{ CENTER_X + 1.5 * GRID_SPACING, CENTER_Y - 3 * GRID_SPACING },
-	{ CENTER_X + 4.5 * GRID_SPACING, CENTER_Y - 5 * GRID_SPACING },
-		
-	// Minute bits, high to low
-	{ CENTER_X - 5.5 * GRID_SPACING, CENTER_Y + 3 * GRID_SPACING },
-	{ CENTER_X - 2.5 * GRID_SPACING, CENTER_Y + 1 * GRID_SPACING },
-	{ CENTER_X - 1.5 * GRID_SPACING, CENTER_Y + 5 * GRID_SPACING },
-	{ CENTER_X + 1.5 * GRID_SPACING, CENTER_Y + 5 * GRID_SPACING },
-	{ CENTER_X + 2.5 * GRID_SPACING, CENTER_Y + 1 * GRID_SPACING },
-	{ CENTER_X + 5.5 * GRID_SPACING, CENTER_Y + 3 * GRID_SPACING },
+	// Stunden: 2^3, 2^2, 2^1, 2^0
+	{ SCALE_X(27),  SCALE_Y(44)  },
+	{ SCALE_X(57),  SCALE_Y(24)  },
+	{ SCALE_X(87),  SCALE_Y(54)  },
+	{ SCALE_X(117), SCALE_Y(34)  },
+
+	// Minuten: 2^5, 2^4, 2^3, 2^2, 2^1, 2^0
+	{ SCALE_X(17),  SCALE_Y(114) },
+	{ SCALE_X(47),  SCALE_Y(94)  },
+	{ SCALE_X(57),  SCALE_Y(134) },
+	{ SCALE_X(87),  SCALE_Y(134) },
+	{ SCALE_X(97),  SCALE_Y(94)  },
+	{ SCALE_X(127), SCALE_Y(114) },
 };
 
-// Values represented by the ten binary positions.
-const char *glbTargetLabels[NUM_CLOCKBITS] =
+// Exponenten der zehn Binaerpositionen.
+// Darstellung:
+//   kleiner Ring = 2^0
+//   ein Punkt    = 2^1
+//   zwei Punkte  = 2^2
+//   ...
+const int glbTargetExponents[NUM_CLOCKBITS] =
 {
-	"8", "4", "2", "1",
-	"32", "16", "8", "4", "2", "1"
+	3, 2, 1, 0,
+	5, 4, 3, 2, 1, 0
 };
 
 // Tracks which binary positions are active for the current time.
@@ -124,7 +146,7 @@ bool glbActiveTargets[NUM_CLOCKBITS] = { false };
 
 PT2 glbPartTargets[NUM_PART];  //Dieses Array enthält für jedes der zehn Partikel seine momentane Zielposition
 	
-const int glbBlinnKernel[KERNEL_RAD] =  //Lava-Lampen-Effekt
+const int glbBlinnKernel[KERNEL_TABLE_RAD] =  //Lava-Lampen-Effekt
 {
 	2048,
 	2037,
@@ -172,9 +194,18 @@ int
 blinn(int dist)  //Einfluss nach Entfernung abrufen
 {
 	dist = FIX2INT(dist);
+
 	if (dist >= KERNEL_RAD)
 		return 0;
-	return glbBlinnKernel[dist];
+
+	// Die ursprüngliche 40-Pixel-Kurve wird auf den effektiven Radius
+	// der jeweiligen Displaygroesse gestreckt.
+	int kernel_index = (dist * KERNEL_TABLE_RAD) / KERNEL_RAD;
+
+	if (kernel_index >= KERNEL_TABLE_RAD)
+		kernel_index = KERNEL_TABLE_RAD - 1;
+
+	return glbBlinnKernel[kernel_index];
 }
 
 int metadist(PT2 a, PT2 b)  //Einfluss eines Partikels auf einen Pixel
@@ -272,39 +303,188 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 			{
 				totaldist += metadist(glbPart[blob_plist[part]].pos, cpos);
 			}
-						if (totaldist > INT2FIX(1))
+if (totaldist > INT2FIX(1))
 				graphics_draw_pixel(ctx, GPoint(x, y));
 		}
 	}
 
-	// Draw the values on top of the active blobs.
-	graphics_context_set_text_color(ctx, GColorWhite);
+	// Die Punktmarkierungen werden erst gezeichnet, nachdem die Partikel
+	// ihre Ziele erreicht haben. Danach blenden sie in etwa 0,8 Sekunden ein.
+	bool draw_labels = glbBlobsSettled && glbLabelBrightness > 0;
 
-	GFont label_font =
-		fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+#if !defined(PBL_COLOR)
+	// Schwarzweiss-Pebbles kennen keine echten Graustufen.
+	draw_labels = glbBlobsSettled && glbLabelBrightness >= 255;
+#endif
 
-	for (int target = 0; target < NUM_CLOCKBITS; target++)
+	if (draw_labels)
 	{
-		if (!glbActiveTargets[target])
-			continue;
-
-		GRect label_bounds = GRect(
-			glbTargets[target].x - 14,
-			glbTargets[target].y - 10,
-			28,
-			20
+#if defined(PBL_COLOR)
+		GColor label_color = GColorFromRGB(
+			glbLabelBrightness,
+			glbLabelBrightness,
+			glbLabelBrightness
 		);
+#else
+		GColor label_color = GColorWhite;
+#endif
 
-		graphics_draw_text(
-			ctx,
-			glbTargetLabels[target],
-			label_font,
-			label_bounds,
-			GTextOverflowModeFill,
-			GTextAlignmentCenter,
-			NULL
-		);
+		graphics_context_set_fill_color(ctx, label_color);
+		graphics_context_set_stroke_color(ctx, label_color);
+
+#if defined(PBL_PLATFORM_EMERY)
+		const int dot_radius = 5;
+		const int pattern_radius = 13;
+#else
+		const int dot_radius = 3;
+		const int pattern_radius = 9;
+#endif
+
+		for (int target = 0; target < NUM_CLOCKBITS; target++)
+		{
+			if (!glbActiveTargets[target])
+				continue;
+
+			const int exponent = glbTargetExponents[target];
+			const int center_x = glbTargets[target].x;
+			const int center_y = glbTargets[target].y;
+
+			if (exponent == 0)
+			{
+				// 2^0 wird als kleiner offener Ring dargestellt.
+				graphics_draw_circle(
+					ctx,
+					GPoint(center_x, center_y),
+					dot_radius
+				);
+				continue;
+			}
+
+			if (exponent == 1)
+			{
+				// Ein einzelner Punkt liegt genau in der Mitte.
+				graphics_fill_circle(
+					ctx,
+					GPoint(center_x, center_y),
+					dot_radius
+				);
+				continue;
+			}
+
+			if (exponent == 2)
+			{
+				// Zwei Punkte senkrecht übereinander.
+				const int offset_y = pattern_radius * 3 / 4;
+
+				graphics_fill_circle(
+					ctx,
+					GPoint(center_x, center_y - offset_y),
+					dot_radius
+				);
+				graphics_fill_circle(
+					ctx,
+					GPoint(center_x, center_y + offset_y),
+					dot_radius
+				);
+				continue;
+			}
+
+			if (exponent == 3)
+			{
+				// Drei Punkte bilden ein gleichmässiges Dreieck.
+				graphics_fill_circle(
+					ctx,
+					GPoint(center_x, center_y - pattern_radius),
+					dot_radius
+				);
+				graphics_fill_circle(
+					ctx,
+					GPoint(
+						center_x - pattern_radius * 7 / 8,
+						center_y + pattern_radius / 2
+					),
+					dot_radius
+				);
+				graphics_fill_circle(
+					ctx,
+					GPoint(
+						center_x + pattern_radius * 7 / 8,
+						center_y + pattern_radius / 2
+					),
+					dot_radius
+				);
+				continue;
+			}
+
+			if (exponent == 4)
+			{
+				// Vier Punkte bilden ein Quadrat.
+				const int offset = pattern_radius * 7 / 10;
+
+				graphics_fill_circle(
+					ctx,
+					GPoint(center_x - offset, center_y - offset),
+					dot_radius
+				);
+				graphics_fill_circle(
+					ctx,
+					GPoint(center_x + offset, center_y - offset),
+					dot_radius
+				);
+				graphics_fill_circle(
+					ctx,
+					GPoint(center_x - offset, center_y + offset),
+					dot_radius
+				);
+				graphics_fill_circle(
+					ctx,
+					GPoint(center_x + offset, center_y + offset),
+					dot_radius
+				);
+				continue;
+			}
+
+			// Fünf Punkte bilden ein regelmässiges Fünfeck.
+			graphics_fill_circle(
+				ctx,
+				GPoint(center_x, center_y - pattern_radius),
+				dot_radius
+			);
+			graphics_fill_circle(
+				ctx,
+				GPoint(
+					center_x + pattern_radius * 12 / 13,
+					center_y - pattern_radius * 4 / 13
+				),
+				dot_radius
+			);
+			graphics_fill_circle(
+				ctx,
+				GPoint(
+					center_x + pattern_radius * 8 / 13,
+					center_y + pattern_radius * 11 / 13
+				),
+				dot_radius
+			);
+			graphics_fill_circle(
+				ctx,
+				GPoint(
+					center_x - pattern_radius * 8 / 13,
+					center_y + pattern_radius * 11 / 13
+				),
+				dot_radius
+			);
+			graphics_fill_circle(
+				ctx,
+				GPoint(
+					center_x - pattern_radius * 12 / 13,
+					center_y - pattern_radius * 4 / 13
+				),
+				dot_radius
+			);
+		}
 	}
+
 }
 void handle_init() 
 {
@@ -328,7 +508,10 @@ void handle_init()
 	}
 	
 	glbLive = true;
+	glbBlobsSettled = false;
+	glbLabelBrightness = 0;
 	app_timer_register(REFRESH_RATE, handle_timer, 0);
+	glbTimerRunning = true;
 	
 	layer_mark_dirty(glbBlobLayerP);
 }
@@ -428,6 +611,11 @@ handle_tick(struct tm *tick_time, TimeUnits units_chnnged)
 		return;
 	
 	glbTargetMinute = tick_time->tm_min;
+
+	// Bei einer neuen Minute verschwinden die Zahlen sofort. Sie werden erst
+	// wieder eingeblendet, wenn alle Partikel ihre neuen Ziele erreicht haben.
+	glbBlobsSettled = false;
+	glbLabelBrightness = 0;
 	
 	int 	ntarget = 0;
 	static int		targets[NUM_CLOCKBITS];
@@ -495,10 +683,12 @@ handle_tick(struct tm *tick_time, TimeUnits units_chnnged)
 		}
 	}
 	
-	if (!glbLive)
+	glbLive = true;
+
+	if (!glbTimerRunning)
 	{
-		glbLive = true;
 		app_timer_register(REFRESH_RATE, handle_timer, 0);
+		glbTimerRunning = true;
 	}
 	
 	layer_mark_dirty(glbBlobLayerP);
@@ -507,10 +697,50 @@ handle_tick(struct tm *tick_time, TimeUnits units_chnnged)
 void
 handle_timer(void *data)
 {
-	glbLive = part_integrate();
-		
-	if (glbLive)
+	(void)data;
+
+	// Der gerade ausgeführte Timer ist nun verbraucht.
+	glbTimerRunning = false;
+
+	bool continue_timer = false;
+
+	if (!glbBlobsSettled)
+	{
+		glbLive = part_integrate();
+
+		// Solange die Blobs unterwegs sind, werden überhaupt keine Zahlen gezeichnet.
+		glbLabelBrightness = 0;
+
+		if (glbLive)
+		{
+			continue_timer = true;
+		}
+		else
+		{
+			// Ab jetzt werden die Partikel nicht mehr weiter integriert.
+			// Dadurch bleiben die Blobs während des Einblendens exakt stehen.
+			glbBlobsSettled = true;
+			glbLive = false;
+			continue_timer = true;
+		}
+	}
+	else if (glbLabelBrightness < 255)
+	{
+		// Erst bei vollständig stillstehenden Blobs langsam einblenden.
+		glbLabelBrightness += LABEL_FADE_STEP;
+
+		if (glbLabelBrightness > 255)
+			glbLabelBrightness = 255;
+
+		continue_timer = glbLabelBrightness < 255;
+	}
+
+	if (continue_timer)
+	{
 		app_timer_register(REFRESH_RATE, handle_timer, 0);
+		glbTimerRunning = true;
+	}
+
 	layer_mark_dirty(glbBlobLayerP);
 }
 
