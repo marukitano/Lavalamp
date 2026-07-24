@@ -193,19 +193,31 @@ const int glbBlinnKernel[KERNEL_TABLE_RAD] =  //Lava-Lampen-Effekt
 int
 blinn(int dist)  //Einfluss nach Entfernung abrufen
 {
-	dist = FIX2INT(dist);
-
-	if (dist >= KERNEL_RAD)
+	if (dist >= INT2FIX(KERNEL_RAD))
 		return 0;
 
-	// Die ursprüngliche 40-Pixel-Kurve wird auf den effektiven Radius
-	// der jeweiligen Displaygroesse gestreckt.
-	int kernel_index = (dist * KERNEL_TABLE_RAD) / KERNEL_RAD;
+	// Distanz proportional auf die ursprüngliche 40-Pixel-Kurve abbilden,
+	// dabei aber den Nachkommateil behalten.
+	int scaled_dist =
+		(dist * KERNEL_TABLE_RAD) / KERNEL_RAD;
 
-	if (kernel_index >= KERNEL_TABLE_RAD)
-		kernel_index = KERNEL_TABLE_RAD - 1;
+	int kernel_index = scaled_dist >> FIXBITS;
+	int fraction = scaled_dist & ((1 << FIXBITS) - 1);
 
-	return glbBlinnKernel[kernel_index];
+	if (kernel_index >= KERNEL_TABLE_RAD - 1)
+	{
+		// Am äussersten Ende gegen null auslaufen lassen.
+		int start_value = glbBlinnKernel[KERNEL_TABLE_RAD - 1];
+		return start_value -
+			FIXMULT(start_value, fraction);
+	}
+
+	int start_value = glbBlinnKernel[kernel_index];
+	int end_value = glbBlinnKernel[kernel_index + 1];
+
+	// Lineare Interpolation zwischen zwei benachbarten Kernelwerten.
+	return start_value +
+		FIXMULT(end_value - start_value, fraction);
 }
 
 int metadist(PT2 a, PT2 b)  //Einfluss eines Partikels auf einen Pixel
@@ -217,6 +229,14 @@ int metadist(PT2 a, PT2 b)  //Einfluss eines Partikels auf einen Pixel
 
 static int blob_plist[NUM_PART];  //Hilfsarrays für das Rendern
 static int blob_plistx[NUM_PART];  //Hilfsarrays für das Rendern
+
+// Echtes Kanten-Antialiasing nur innerhalb eines einzelnen Pixels.
+// Die Blobfläche selbst bleibt scharf und vollständig schwarz.
+#define AA_SAMPLE_OFFSET (INT2FIX(1) / 4)
+
+// Nur ein sehr schmaler Bereich direkt an der Kontur wird geglättet.
+// Der alte Wert 1/2 war viel zu breit und konnte die Form unruhig machen.
+#define AA_CHECK_BAND (INT2FIX(1) / 10)
 
 void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK. ab hier wird gezeichnet
 {
@@ -295,16 +315,115 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 				startidx++;
 			}
 			
-			PT2		cpos;
+			PT2 cpos;
 			cpos.x = INT2FIX(x);
 			cpos.y = INT2FIX(y);
-			int		totaldist = 0;
+
+			int totaldist = 0;
 			for (int part = startidx; part < endidx; part++)
 			{
-				totaldist += metadist(glbPart[blob_plist[part]].pos, cpos);
+				totaldist += metadist(
+					glbPart[blob_plist[part]].pos,
+					cpos
+				);
 			}
-if (totaldist > INT2FIX(1))
+
+			const int threshold = INT2FIX(1);
+
+			if (totaldist >= threshold + AA_CHECK_BAND)
+			{
+				// Klar innerhalb des Blobs: vollständig schwarz.
 				graphics_draw_pixel(ctx, GPoint(x, y));
+			}
+			else if (totaldist > threshold - AA_CHECK_BAND)
+			{
+				// Nur direkt an der mathematischen Aussenkante werden vier
+				// Unterpixel geprüft. Dadurch wird ausschliesslich der
+				// Treppeneffekt geglättet, ohne die Kontur weichzuzeichnen.
+				int covered_samples = 0;
+
+				const int sample_x[4] =
+				{
+					cpos.x - AA_SAMPLE_OFFSET,
+					cpos.x + AA_SAMPLE_OFFSET,
+					cpos.x - AA_SAMPLE_OFFSET,
+					cpos.x + AA_SAMPLE_OFFSET
+				};
+
+				const int sample_y[4] =
+				{
+					cpos.y - AA_SAMPLE_OFFSET,
+					cpos.y - AA_SAMPLE_OFFSET,
+					cpos.y + AA_SAMPLE_OFFSET,
+					cpos.y + AA_SAMPLE_OFFSET
+				};
+
+				for (int sample_index = 0;
+				     sample_index < 4;
+				     sample_index++)
+				{
+					PT2 sample_pos =
+					{
+						sample_x[sample_index],
+						sample_y[sample_index]
+					};
+
+					int sample_dist = 0;
+
+					for (int part = startidx;
+					     part < endidx;
+					     part++)
+					{
+						sample_dist += metadist(
+							glbPart[blob_plist[part]].pos,
+							sample_pos
+						);
+					}
+
+					if (sample_dist > threshold)
+						covered_samples++;
+				}
+
+				if (covered_samples == 4)
+				{
+					graphics_context_set_stroke_color(
+						ctx,
+						GColorBlack
+					);
+					graphics_draw_pixel(ctx, GPoint(x, y));
+				}
+#if defined(PBL_COLOR)
+				else if (covered_samples > 0)
+				{
+					// Ein einziger grauer Randpixel bildet die berechnete
+					// Teilabdeckung ab. Es gibt keinen breiten weichen Saum.
+					int gray;
+
+					if (covered_samples == 3)
+						gray = 85;
+					else if (covered_samples == 2)
+						gray = 128;
+					else
+						gray = 170;
+
+					graphics_context_set_stroke_color(
+						ctx,
+						GColorFromRGB(gray, gray, gray)
+					);
+					graphics_draw_pixel(ctx, GPoint(x, y));
+
+					graphics_context_set_stroke_color(
+						ctx,
+						GColorBlack
+					);
+				}
+#else
+				else if (covered_samples >= 2)
+				{
+					graphics_draw_pixel(ctx, GPoint(x, y));
+				}
+#endif
+			}
 		}
 	}
 
