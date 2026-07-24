@@ -16,10 +16,10 @@ module.exports = [
       },
       {
         "type": "toggle",
-        "messageKey": "ShowValues",
+        "messageKey": "ShakeValues",
         "defaultValue": true,
-        "label": "Show values",
-        "description": "Turn this off to use the original blob-only style."
+        "label": "Shake to see values",
+        "description": "Show the values for a few seconds after one detected wrist shake or tap."
       }
     ]
   },

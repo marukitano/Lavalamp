@@ -24,6 +24,8 @@
 #define LABEL_OPACITY_MAX 255
 #define VALUE_OPTICAL_Y_OFFSET (-7)
 
+#define VALUES_VISIBLE_MS 4000
+
 #define APP_MESSAGE_BUFFER_SIZE 128
 #define SETTINGS_PERSIST_KEY 1
 
@@ -77,7 +79,7 @@ typedef struct {
     uint8_t background_argb;
     uint8_t blob_argb;
     uint8_t value_argb;
-    uint8_t show_values;
+    uint8_t shake_values;
 } LavalampSettings;
 
 // Used once to migrate installations that stored only the three colors.
@@ -94,6 +96,7 @@ typedef struct {
 static Window *s_window;
 static Layer *s_blob_layer;
 static AppTimer *s_animation_timer;
+static AppTimer *s_hide_values_timer;
 
 static GFont s_value_fonts[NUM_VALUE_FONTS];
 static int s_value_font_heights[NUM_CLOCK_BITS][NUM_VALUE_FONTS];
@@ -106,6 +109,7 @@ static GColor s_edge_colors[5];
 
 static bool s_blobs_settled;
 static int s_label_opacity;
+static int s_label_target_opacity;
 static int s_target_hour = -1;
 static int s_target_minute = -1;
 
@@ -162,6 +166,8 @@ static const int s_blinn_kernel[KERNEL_TABLE_RADIUS] = {
 // -----------------------------------------------------------------------------
 
 static void animation_timer_callback(void *context);
+static void hide_values_timer_callback(void *context);
+static void tap_handler(AccelAxisType axis, int32_t direction);
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed);
 static void save_settings(void);
 
@@ -276,7 +282,7 @@ static void load_settings(void)
     s_settings.background_argb = GColorWhite.argb;
     s_settings.blob_argb = GColorBlack.argb;
     s_settings.value_argb = GColorWhite.argb;
-    s_settings.show_values = true;
+    s_settings.shake_values = true;
 
     if (persist_exists(SETTINGS_PERSIST_KEY)) {
         const int stored_size = persist_get_size(SETTINGS_PERSIST_KEY);
@@ -302,7 +308,7 @@ static void load_settings(void)
                 legacy_settings.value_argb;
 
             // Existing users keep the current appearance after updating.
-            s_settings.show_values = true;
+            s_settings.shake_values = true;
             save_settings();
         }
     }
@@ -347,9 +353,21 @@ static void inbox_received_handler(
         changed = true;
     }
 
-    tuple = dict_find(iterator, MESSAGE_KEY_ShowValues);
+    tuple = dict_find(iterator, MESSAGE_KEY_ShakeValues);
     if (tuple) {
-        s_settings.show_values = tuple->value->int32 != 0;
+        s_settings.shake_values =
+            tuple->value->int32 != 0;
+
+        if (!s_settings.shake_values) {
+            if (s_hide_values_timer) {
+                app_timer_cancel(s_hide_values_timer);
+                s_hide_values_timer = NULL;
+            }
+
+            s_label_opacity = 0;
+            s_label_target_opacity = 0;
+        }
+
         changed = true;
     }
 
@@ -605,7 +623,7 @@ static void draw_blobs(GContext *context)
 
 static void draw_values(GContext *context)
 {
-    if (!s_settings.show_values) {
+    if (!s_settings.shake_values) {
         return;
     }
 
@@ -865,6 +883,12 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed)
     s_target_minute = tick_time->tm_min;
     s_blobs_settled = false;
     s_label_opacity = 0;
+    s_label_target_opacity = 0;
+
+    if (s_hide_values_timer) {
+        app_timer_cancel(s_hide_values_timer);
+        s_hide_values_timer = NULL;
+    }
 
     int active_targets[NUM_CLOCK_BITS];
     const int active_count = collect_active_targets(
@@ -879,6 +903,62 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed)
 // -----------------------------------------------------------------------------
 // Animation
 // -----------------------------------------------------------------------------
+
+static void schedule_hide_values_timer(void)
+{
+    if (s_hide_values_timer) {
+        app_timer_cancel(s_hide_values_timer);
+    }
+
+    s_hide_values_timer = app_timer_register(
+        VALUES_VISIBLE_MS,
+        hide_values_timer_callback,
+        NULL);
+}
+
+static void show_values_temporarily(void)
+{
+    if (!s_settings.shake_values) {
+        return;
+    }
+
+    if (s_hide_values_timer) {
+        app_timer_cancel(s_hide_values_timer);
+        s_hide_values_timer = NULL;
+    }
+
+    s_label_target_opacity = LABEL_OPACITY_MAX;
+
+    if (s_blobs_settled &&
+        s_label_opacity >= LABEL_OPACITY_MAX) {
+        schedule_hide_values_timer();
+    } else {
+        schedule_animation_timer();
+    }
+
+    layer_mark_dirty(s_blob_layer);
+}
+
+static void hide_values_timer_callback(void *context)
+{
+    (void)context;
+    s_hide_values_timer = NULL;
+    s_label_target_opacity = 0;
+    schedule_animation_timer();
+}
+
+static void tap_handler(AccelAxisType axis, int32_t direction)
+{
+    (void)axis;
+    (void)direction;
+
+    if (!s_settings.shake_values) {
+        return;
+    }
+
+    // A single accelerometer tap/shake is enough.
+    show_values_temporarily();
+}
 
 static void animation_timer_callback(void *context)
 {
@@ -895,16 +975,31 @@ static void animation_timer_callback(void *context)
             continue_animation = true;
         } else {
             s_blobs_settled = true;
-            continue_animation = true;
+            continue_animation =
+                s_label_opacity != s_label_target_opacity;
         }
-    } else if (s_label_opacity < LABEL_OPACITY_MAX) {
+    } else if (s_label_opacity < s_label_target_opacity) {
         s_label_opacity += LABEL_FADE_STEP;
 
-        if (s_label_opacity > LABEL_OPACITY_MAX) {
-            s_label_opacity = LABEL_OPACITY_MAX;
+        if (s_label_opacity >= s_label_target_opacity) {
+            s_label_opacity = s_label_target_opacity;
+
+            if (s_label_opacity == LABEL_OPACITY_MAX) {
+                schedule_hide_values_timer();
+            }
         }
 
-        continue_animation = s_label_opacity < LABEL_OPACITY_MAX;
+        continue_animation =
+            s_label_opacity != s_label_target_opacity;
+    } else if (s_label_opacity > s_label_target_opacity) {
+        s_label_opacity -= LABEL_FADE_STEP;
+
+        if (s_label_opacity < s_label_target_opacity) {
+            s_label_opacity = s_label_target_opacity;
+        }
+
+        continue_animation =
+            s_label_opacity != s_label_target_opacity;
     }
 
     if (continue_animation) {
@@ -952,17 +1047,24 @@ static void app_initialize(void)
     window_stack_push(s_window, true);
 
     tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+    accel_tap_service_subscribe(tap_handler);
     initialize_current_time();
 }
 
 static void app_deinitialize(void)
 {
     tick_timer_service_unsubscribe();
+    accel_tap_service_unsubscribe();
     app_message_deregister_callbacks();
 
     if (s_animation_timer) {
         app_timer_cancel(s_animation_timer);
         s_animation_timer = NULL;
+    }
+
+    if (s_hide_values_timer) {
+        app_timer_cancel(s_hide_values_timer);
+        s_hide_values_timer = NULL;
     }
 
     if (s_blob_layer) {
