@@ -5,6 +5,11 @@
 
 Window *glbWindowP;  //globaler Pointer auf das Hauptfenster der App
 Layer *glbBlobLayerP;  //Pointer auf die Zeichenebene, auf der die Blobs gerendert werden.
+#define NUM_VALUE_FONTS 6
+
+// Mehrere feste Groessen desselben Fonts.
+// Pebble kann einen geladenen Font nicht stufenlos skalieren.
+GFont glbValueFonts[NUM_VALUE_FONTS];
 
 bool glbLive = false; //merkt sich, ob sich die Partikel noch bewegen
 bool glbBlobsSettled = false; //true, sobald alle Blobs ihre Zielposition erreicht haben
@@ -129,22 +134,52 @@ const PT2 glbTargets[NUM_CLOCKBITS] = //proportional skalierte Blobpositionen
 	{ SCALE_X(127), SCALE_Y(114) },
 };
 
-// Exponenten der zehn Binaerpositionen.
-// Darstellung:
-//   kleiner Ring = 2^0
-//   ein Punkt    = 2^1
-//   zwei Punkte  = 2^2
-//   ...
-const int glbTargetExponents[NUM_CLOCKBITS] =
+// Werte der zehn Binaerpositionen.
+const char *glbTargetLabels[NUM_CLOCKBITS] =
 {
-	3, 2, 1, 0,
-	5, 4, 3, 2, 1, 0
+	"8", "4", "2", "1",
+	"32", "16", "8", "4", "2", "1"
 };
 
 // Tracks which binary positions are active for the current time.
 bool glbActiveTargets[NUM_CLOCKBITS] = { false };
 
+// Anzahl der Partikel, die dem jeweiligen Zielblob zugeordnet wurden.
+// Daraus wird spaeter die passende Schriftgroesse gewaehlt.
+uint8_t glbTargetParticleCount[NUM_CLOCKBITS] = { 0 };
+
 PT2 glbPartTargets[NUM_PART];  //Dieses Array enthält für jedes der zehn Partikel seine momentane Zielposition
+
+int value_font_index_for_target(int target)
+{
+	const int particle_count = glbTargetParticleCount[target];
+	const bool is_two_digit =
+		glbTargetLabels[target][1] != '\0';
+
+	if (is_two_digit)
+	{
+		// 16 und 32 brauchen deutlich weniger Schriftgroesse als eine
+		// einzelne Ziffer. Sonst ragt der weisse Text aus dem schwarzen
+		// Blob heraus und verschwindet auf dem weissen Hintergrund.
+		if (particle_count <= 1)
+			return 0;  // Modak 26
+		if (particle_count == 2)
+			return 1;  // Modak 32
+		if (particle_count == 3)
+			return 2;  // Modak 36
+		return 3;      // Modak 42
+	}
+
+	// Einstellige Werte behalten die bisher gut wirkenden Groessen.
+	if (particle_count <= 1)
+		return 2;  // Modak 36
+	if (particle_count == 2)
+		return 3;  // Modak 42
+	if (particle_count == 3)
+		return 4;  // Modak 48
+	return 5;      // Modak 54
+}
+
 	
 const int glbBlinnKernel[KERNEL_TABLE_RAD] =  //Lava-Lampen-Effekt
 {
@@ -427,8 +462,8 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 		}
 	}
 
-	// Die Punktmarkierungen werden erst gezeichnet, nachdem die Partikel
-	// ihre Ziele erreicht haben. Danach blenden sie in etwa 0,8 Sekunden ein.
+	// Die Werte werden erst gezeichnet, nachdem die Blobs ihre Zielpositionen
+	// erreicht haben. Danach blenden sie in etwa 0,8 Sekunden ein.
 	bool draw_labels = glbBlobsSettled && glbLabelBrightness > 0;
 
 #if !defined(PBL_COLOR)
@@ -448,15 +483,14 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 		GColor label_color = GColorWhite;
 #endif
 
-		graphics_context_set_fill_color(ctx, label_color);
-		graphics_context_set_stroke_color(ctx, label_color);
+		graphics_context_set_text_color(ctx, label_color);
 
 #if defined(PBL_PLATFORM_EMERY)
-		const int dot_radius = 5;
-		const int pattern_radius = 13;
+		const int label_width = 104;
+		const int max_label_height = 80;
 #else
-		const int dot_radius = 3;
-		const int pattern_radius = 9;
+		const int label_width = 72;
+		const int max_label_height = 58;
 #endif
 
 		for (int target = 0; target < NUM_CLOCKBITS; target++)
@@ -464,142 +498,56 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 			if (!glbActiveTargets[target])
 				continue;
 
-			const int exponent = glbTargetExponents[target];
-			const int center_x = glbTargets[target].x;
-			const int center_y = glbTargets[target].y;
+			int font_index = value_font_index_for_target(target);
+			GFont value_font = glbValueFonts[font_index];
 
-			if (exponent == 0)
-			{
-				// 2^0 wird als kleiner offener Ring dargestellt.
-				graphics_draw_circle(
-					ctx,
-					GPoint(center_x, center_y),
-					dot_radius
-				);
-				continue;
-			}
-
-			if (exponent == 1)
-			{
-				// Ein einzelner Punkt liegt genau in der Mitte.
-				graphics_fill_circle(
-					ctx,
-					GPoint(center_x, center_y),
-					dot_radius
-				);
-				continue;
-			}
-
-			if (exponent == 2)
-			{
-				// Zwei Punkte senkrecht übereinander.
-				const int offset_y = pattern_radius * 3 / 4;
-
-				graphics_fill_circle(
-					ctx,
-					GPoint(center_x, center_y - offset_y),
-					dot_radius
-				);
-				graphics_fill_circle(
-					ctx,
-					GPoint(center_x, center_y + offset_y),
-					dot_radius
-				);
-				continue;
-			}
-
-			if (exponent == 3)
-			{
-				// Drei Punkte bilden ein gleichmässiges Dreieck.
-				graphics_fill_circle(
-					ctx,
-					GPoint(center_x, center_y - pattern_radius),
-					dot_radius
-				);
-				graphics_fill_circle(
-					ctx,
-					GPoint(
-						center_x - pattern_radius * 7 / 8,
-						center_y + pattern_radius / 2
+			// Die Schriftgroesse ändert sich mit der Blobgroesse.
+			// Darum darf die Oberkante des Textfeldes nicht für alle Fonts
+			// gleich sein: Kleine Fonts würden sonst höher, grosse tiefer sitzen.
+			// Pebble misst hier für genau diesen Text und genau diesen Font
+			// zunächst die tatsächliche Zeilenhöhe.
+			GSize text_size =
+				graphics_text_layout_get_content_size(
+					glbTargetLabels[target],
+					value_font,
+					GRect(
+						0,
+						0,
+						label_width,
+						max_label_height
 					),
-					dot_radius
+					GTextOverflowModeFill,
+					GTextAlignmentCenter
 				);
-				graphics_fill_circle(
-					ctx,
-					GPoint(
-						center_x + pattern_radius * 7 / 8,
-						center_y + pattern_radius / 2
-					),
-					dot_radius
-				);
-				continue;
-			}
 
-			if (exponent == 4)
-			{
-				// Vier Punkte bilden ein Quadrat.
-				const int offset = pattern_radius * 7 / 10;
+			int draw_height = text_size.h;
 
-				graphics_fill_circle(
-					ctx,
-					GPoint(center_x - offset, center_y - offset),
-					dot_radius
-				);
-				graphics_fill_circle(
-					ctx,
-					GPoint(center_x + offset, center_y - offset),
-					dot_radius
-				);
-				graphics_fill_circle(
-					ctx,
-					GPoint(center_x - offset, center_y + offset),
-					dot_radius
-				);
-				graphics_fill_circle(
-					ctx,
-					GPoint(center_x + offset, center_y + offset),
-					dot_radius
-				);
-				continue;
-			}
+			if (draw_height < 1)
+				draw_height = max_label_height;
 
-			// Fünf Punkte bilden ein regelmässiges Fünfeck.
-			graphics_fill_circle(
-				ctx,
-				GPoint(center_x, center_y - pattern_radius),
-				dot_radius
+			// Nun wird die gemessene Textzeile um den Zielpunkt des Blobs
+			// zentriert. Damit sitzt jede Schriftgroesse auf derselben Mitte.
+			// Nach der dynamischen Zentrierung sitzt Modak optisch noch
+			// minimal zu tief. Dieser gemeinsame Offset verschiebt alle
+			// Schriftgroessen gleichmaessig 3 Pixel nach oben.
+			const int optical_y_offset = -5;
+
+			GRect text_bounds = GRect(
+				glbTargets[target].x - label_width / 2,
+				glbTargets[target].y - draw_height / 2
+					+ optical_y_offset,
+				label_width,
+				draw_height + 2
 			);
-			graphics_fill_circle(
+
+			graphics_draw_text(
 				ctx,
-				GPoint(
-					center_x + pattern_radius * 12 / 13,
-					center_y - pattern_radius * 4 / 13
-				),
-				dot_radius
-			);
-			graphics_fill_circle(
-				ctx,
-				GPoint(
-					center_x + pattern_radius * 8 / 13,
-					center_y + pattern_radius * 11 / 13
-				),
-				dot_radius
-			);
-			graphics_fill_circle(
-				ctx,
-				GPoint(
-					center_x - pattern_radius * 8 / 13,
-					center_y + pattern_radius * 11 / 13
-				),
-				dot_radius
-			);
-			graphics_fill_circle(
-				ctx,
-				GPoint(
-					center_x - pattern_radius * 12 / 13,
-					center_y - pattern_radius * 4 / 13
-				),
-				dot_radius
+				glbTargetLabels[target],
+				value_font,
+				text_bounds,
+				GTextOverflowModeFill,
+				GTextAlignmentCenter,
+				NULL
 			);
 		}
 	}
@@ -607,6 +555,25 @@ void bloblayer_update(Layer *me, GContext *ctx)  //raw()-Methode von Pebble SDK.
 }
 void handle_init() 
 {
+	glbValueFonts[0] = fonts_load_custom_font(
+		resource_get_handle(RESOURCE_ID_FONT_MODAK_26)
+	);
+	glbValueFonts[1] = fonts_load_custom_font(
+		resource_get_handle(RESOURCE_ID_FONT_MODAK_32)
+	);
+	glbValueFonts[2] = fonts_load_custom_font(
+		resource_get_handle(RESOURCE_ID_FONT_MODAK_36)
+	);
+	glbValueFonts[3] = fonts_load_custom_font(
+		resource_get_handle(RESOURCE_ID_FONT_MODAK_42)
+	);
+	glbValueFonts[4] = fonts_load_custom_font(
+		resource_get_handle(RESOURCE_ID_FONT_MODAK_48)
+	);
+	glbValueFonts[5] = fonts_load_custom_font(
+		resource_get_handle(RESOURCE_ID_FONT_MODAK_54)
+	);
+
 	glbWindowP = window_create();
 	
 	window_stack_push(glbWindowP, true /* Animated */);
@@ -637,6 +604,19 @@ void handle_init()
 
 void handle_deinit() 
 {
+	for (int font_index = 0;
+	     font_index < NUM_VALUE_FONTS;
+	     font_index++)
+	{
+		if (glbValueFonts[font_index])
+		{
+			fonts_unload_custom_font(
+				glbValueFonts[font_index]
+			);
+			glbValueFonts[font_index] = NULL;
+		}
+	}
+
 	window_destroy(glbWindowP);
 	glbWindowP = 0;
 	layer_destroy(glbBlobLayerP);
@@ -740,8 +720,11 @@ handle_tick(struct tm *tick_time, TimeUnits units_chnnged)
 	static int		targets[NUM_CLOCKBITS];
 	int hour = tick_time->tm_hour;
 
-    for (int target = 0; target < NUM_CLOCKBITS; target++)
-	    glbActiveTargets[target] = false;
+	for (int target = 0; target < NUM_CLOCKBITS; target++)
+	{
+		glbActiveTargets[target] = false;
+		glbTargetParticleCount[target] = 0;
+	}
 	
 	if (hour > 12)
 		hour -= 12;
@@ -792,13 +775,18 @@ handle_tick(struct tm *tick_time, TimeUnits units_chnnged)
 			partlist[pidx+i] = partlist[i];
 			partlist[i] = tmp;
 			
-			glbPartTargets[partlist[i]] = glbTargets[targets[i]];
+			int target = targets[i];
+			glbPartTargets[partlist[i]] = glbTargets[target];
+			glbTargetParticleCount[target]++;
 		}
 		// Remaining particles get a random target.
 		for (int i = ntarget; i < NUM_PART; i++)
 		{
 			int t = rand_choice(ntarget);
-			glbPartTargets[partlist[i]] = glbTargets[targets[t]];
+			int target = targets[t];
+
+			glbPartTargets[partlist[i]] = glbTargets[target];
+			glbTargetParticleCount[target]++;
 		}
 	}
 	

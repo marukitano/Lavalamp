@@ -26,7 +26,44 @@
     },
     "messageKeys": [],
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "font",
+          "name": "FONT_MODAK_26",
+          "file": "fonts/Modak-Regular.ttf",
+          "characterRegex": "[0-9]"
+        },
+        {
+          "type": "font",
+          "name": "FONT_MODAK_32",
+          "file": "fonts/Modak-Regular.ttf",
+          "characterRegex": "[0-9]"
+        },
+        {
+          "type": "font",
+          "name": "FONT_MODAK_36",
+          "file": "fonts/Modak-Regular.ttf",
+          "characterRegex": "[0-9]"
+        },
+        {
+          "type": "font",
+          "name": "FONT_MODAK_42",
+          "file": "fonts/Modak-Regular.ttf",
+          "characterRegex": "[0-9]"
+        },
+        {
+          "type": "font",
+          "name": "FONT_MODAK_48",
+          "file": "fonts/Modak-Regular.ttf",
+          "characterRegex": "[0-9]"
+        },
+        {
+          "type": "font",
+          "name": "FONT_MODAK_54",
+          "file": "fonts/Modak-Regular.ttf",
+          "characterRegex": "[0-9]"
+        }
+      ]
     }
   }
 }
