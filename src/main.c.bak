@@ -80,15 +80,7 @@ typedef struct {
     uint8_t blob_argb;
     uint8_t value_argb;
     uint8_t shake_values;
-    uint8_t show_emblem;
 } LavalampSettings;
-
-typedef struct {
-    uint8_t background_argb;
-    uint8_t blob_argb;
-    uint8_t value_argb;
-    uint8_t shake_values;
-} PreviousLavalampSettings;
 
 // Used once to migrate installations that stored only the three colors.
 typedef struct {
@@ -291,7 +283,6 @@ static void load_settings(void)
     s_settings.blob_argb = GColorBlack.argb;
     s_settings.value_argb = GColorWhite.argb;
     s_settings.shake_values = true;
-    s_settings.show_emblem = true;
 
     if (persist_exists(SETTINGS_PERSIST_KEY)) {
         const int stored_size = persist_get_size(SETTINGS_PERSIST_KEY);
@@ -301,21 +292,6 @@ static void load_settings(void)
                 SETTINGS_PERSIST_KEY,
                 &s_settings,
                 sizeof(s_settings));
-        } else if (stored_size == (int)sizeof(PreviousLavalampSettings)) {
-            PreviousLavalampSettings previous_settings;
-
-            persist_read_data(
-                SETTINGS_PERSIST_KEY,
-                &previous_settings,
-                sizeof(previous_settings));
-
-            s_settings.background_argb = previous_settings.background_argb;
-            s_settings.blob_argb = previous_settings.blob_argb;
-            s_settings.value_argb = previous_settings.value_argb;
-            s_settings.shake_values = previous_settings.shake_values;
-            s_settings.show_emblem = true;
-
-            save_settings();
         } else if (stored_size == (int)sizeof(LegacyLavalampSettings)) {
             LegacyLavalampSettings legacy_settings;
 
@@ -333,7 +309,6 @@ static void load_settings(void)
 
             // Existing users keep the current appearance after updating.
             s_settings.shake_values = true;
-            s_settings.show_emblem = true;
             save_settings();
         }
     }
@@ -393,12 +368,6 @@ static void inbox_received_handler(
             s_label_target_opacity = 0;
         }
 
-        changed = true;
-    }
-
-    tuple = dict_find(iterator, MESSAGE_KEY_ShowEmblem);
-    if (tuple) {
-        s_settings.show_emblem = tuple->value->int32 != 0;
         changed = true;
     }
 
@@ -652,89 +621,6 @@ static void draw_blobs(GContext *context)
     }
 }
 
-static void draw_swiss_emblem(GContext *context)
-{
-    if (!s_settings.show_emblem) {
-        return;
-    }
-
-    static const char *const emblem_rows[14] = {
-        "..RRRRRRRRR..",
-        ".RRRRWWWRRRR.",
-        ".RRRRWWWRRRR.",
-        ".RRRRWWWRRRR.",
-        ".RWWWWWWWWWR.",
-        ".RWWWWWWWWWR.",
-        ".RWWWWWWWWWR.",
-        ".RRRRWWWRRRR.",
-        ".RRRRWWWRRRR.",
-        "..RRRWWWRRR..",
-        "..RRRRRRRRR..",
-        "....RRRRR....",
-        ".....RRR.....",
-        "......R......"
-    };
-
-    const int16_t emblem_width = 13;
-    const int16_t emblem_height = 14;
-    const GPoint center = GPoint(
-        DISPLAY_WIDTH / 2,
-        DISPLAY_HEIGHT / 2 - SCALE_Y(5));
-
-    const int16_t left = center.x - emblem_width / 2;
-    const int16_t top = center.y - emblem_height / 2;
-
-#if defined(PBL_COLOR)
-    const GColor shield_color = GColorRed;
-    const GColor cross_color = GColorWhite;
-#else
-    const GColor shield_color = s_blob_color;
-    const GColor cross_color = s_value_color;
-#endif
-
-    for (int16_t row = 0; row < emblem_height; row++) {
-        int16_t run_start = -1;
-        char current_symbol = '.';
-
-        for (int16_t column = 0; column <= emblem_width; column++) {
-            const char symbol =
-                column < emblem_width ? emblem_rows[row][column] : '.';
-            const bool drawable = symbol == 'R' || symbol == 'W';
-
-            if (drawable && run_start < 0) {
-                run_start = column;
-                current_symbol = symbol;
-                continue;
-            }
-
-            if (drawable && run_start >= 0 && symbol == current_symbol) {
-                continue;
-            }
-
-            if (run_start >= 0) {
-                graphics_context_set_fill_color(
-                    context,
-                    current_symbol == 'W' ? cross_color : shield_color);
-
-                graphics_fill_rect(
-                    context,
-                    GRect(left + run_start, top + row,
-                          column - run_start, 1),
-                    0,
-                    GCornerNone);
-
-                run_start = -1;
-                current_symbol = '.';
-            }
-
-            if (drawable) {
-                run_start = column;
-                current_symbol = symbol;
-            }
-        }
-    }
-}
-
 static void draw_values(GContext *context)
 {
     if (!s_settings.shake_values) {
@@ -797,7 +683,6 @@ static void blob_layer_update(Layer *layer, GContext *context)
         GCornerNone);
 
     draw_blobs(context);
-    draw_swiss_emblem(context);
     draw_values(context);
 }
 

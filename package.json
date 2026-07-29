@@ -1,7 +1,7 @@
 {
   "name": "lavalamp",
   "author": "Maru Kitano",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "keywords": [
     "pebble-app",
     "watchface",
@@ -30,7 +30,8 @@
       "BackgroundColor",
       "BlobColor",
       "ValueColor",
-      "ShakeValues"
+      "ShakeValues",
+      "ShowEmblem"
     ],
     "resources": {
       "media": [

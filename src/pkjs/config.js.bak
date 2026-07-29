@@ -20,13 +20,6 @@ module.exports = [
         "defaultValue": true,
         "label": "Shake to see values",
         "description": "Show the values for a few seconds after one detected wrist shake or tap."
-      },
-      {
-        "type": "toggle",
-        "messageKey": "ShowEmblem",
-        "defaultValue": true,
-        "label": "Show Swiss emblem",
-        "description": "Display a small Swiss coat of arms slightly above the center."
       }
     ]
   },
