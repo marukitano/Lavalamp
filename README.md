@@ -4,6 +4,8 @@ Ein moderner Fork des klassischen **Binary Blob**-Watchfaces für Pebble.
 
 Lavalamp ist eine Binäruhr, die die aktuelle Uhrzeit mit animierten Blobs darstellt. Bei jedem Minutenwechsel fliessen die Blobs wie in einer Lavalampe über das Display und nehmen anschliessend ihre neue Position ein. Dadurch entsteht ein minimalistisches Watchface, das eine Binäruhr mit organischen Animationen verbindet.
 
+Da ich Schweizer bin, musste natürlich auch ein kleines Schweizer Wappen auf das Zifferblatt. Damit ist Lavalamp jetzt offiziell ein Schweizer Zifferblatt. Wer das Wappen doof findet, kann es in den Einstellungen aber einfach ausblenden.
+
 Das gesamte Projekt wurde in **C** mit dem Pebble SDK entwickelt und ist vollständig Open Source.
 
 ---
@@ -14,6 +16,7 @@ Das gesamte Projekt wurde in **C** mit dem Pebble SDK entwickelt und ist vollst�
 - 🕒 Binäre Darstellung von Stunden und Minuten
 - 🔢 Optionale Anzeige der Werte (1, 2, 4, 8, 16, 32)
 - 📳 Werte können per Handgelenksbewegung kurz eingeblendet werden
+- 🇨🇭 Optionales Schweizer Wappen
 - 🎨 Frei konfigurierbare Farben
   - Hintergrund
   - Blobs
@@ -73,6 +76,7 @@ Folgende Optionen stehen zur Verfügung:
 - Blobfarbe
 - Zahlenfarbe
 - Ein- oder Ausschalten von **„Shake to see values“**
+- Ein- oder Ausschalten des Schweizer Wappens
 
 ---
 
@@ -101,6 +105,7 @@ Lavalamp erweitert das ursprüngliche Watchface unter anderem um:
 - Modak-Schriftart für die Zahlen
 - Sanftes Ein- und Ausblenden der Werte
 - Werteanzeige per Handgelenksbewegung
+- Optionales Schweizer Wappen
 - Umfangreiche Codebereinigung und Modernisierung
 
 ---
@@ -133,6 +138,8 @@ A modern fork of the classic **Binary Blob** watchface for Pebble.
 
 Lavalamp is a binary clock that displays the current time as animated blobs. Every minute the blobs flow across the screen like a lava lamp before settling into their new positions. The result is a minimalist watchface that combines binary time with smooth organic animations.
 
+Since I am Swiss, the watchface naturally needed a small Swiss coat of arms. That officially makes Lavalamp a Swiss watchface. Anyone who thinks the emblem is silly can simply hide it in the settings.
+
 This project is written entirely in **C** using the Pebble SDK and is fully open source.
 
 ---
@@ -143,6 +150,7 @@ This project is written entirely in **C** using the Pebble SDK and is fully open
 - 🕒 Binary clock with hour and minute values
 - 🔢 Optional value overlay (1, 2, 4, 8, 16, 32)
 - 📳 Shake the watch to briefly reveal the values
+- 🇨🇭 Optional Swiss coat of arms
 - 🎨 Configurable colors
   - Background color
   - Blob color
@@ -202,6 +210,7 @@ The following options are available:
 - Blob color
 - Value color
 - Enable or disable **Shake to see values**
+- Show or hide the Swiss coat of arms
 
 ---
 
@@ -212,6 +221,7 @@ Lavalamp is based on the original **Binary Blob** watchface by **jmlait** (2014)
 The original author kindly granted permission to fork and improve the project under a BSD-style license.
 
 Original project:
+
 https://github.com/jmlaitpebble/binaryblob
 
 Many thanks to **jmlait** for creating one of the most unique Pebble watchfaces.
@@ -229,6 +239,7 @@ Compared to the original project, Lavalamp adds:
 - Custom Modak font
 - Smooth value fade animation
 - Shake gesture to reveal values
+- Optional Swiss coat of arms
 - General code cleanup and modernization
 
 ---
