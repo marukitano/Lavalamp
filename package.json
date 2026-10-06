@@ -1,7 +1,7 @@
 {
   "name": "lavalamp",
   "author": "Marukitano",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "keywords": [
     "pebble-app",
     "watchface",
@@ -9,7 +9,7 @@
   ],
   "private": true,
   "dependencies": {
-    "@rebble/clay": "^1.2.0"
+    "@rebble/clay": "^1.0.10"
   },
   "pebble": {
     "displayName": "Lavalamp",
