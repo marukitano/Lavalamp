@@ -1,5 +1,9 @@
 # Lavalamp
 
+<p align="center">
+  <img src="docs/store-preview.jpg" alt="Lavalamp on Pebble Time 2" width="600">
+</p>
+
 Ein moderner Fork des klassischen **Binary Blob**-Watchfaces für Pebble.
 
 Lavalamp ist eine Binäruhr, die die aktuelle Uhrzeit mit animierten Blobs darstellt. Bei jedem Minutenwechsel fliessen die Blobs wie in einer Lavalampe über das Display und nehmen anschliessend ihre neue Position ein. Dadurch entsteht ein minimalistisches Watchface, das eine Binäruhr mit organischen Animationen verbindet.
